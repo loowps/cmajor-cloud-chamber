@@ -1,0 +1,21 @@
+{
+    "CmajorVersion": 1,
+    "ID":            "com.loowps.cloudchamber",
+    "version":       "0.1",
+    "name":          "Cloud Chamber",
+    "description":   "Granular synthesiser: eight independent playheads reading one dragged-in sample, each with its own region, motion and grain character, playable from MIDI or free-running as a drone",
+    "manufacturer":  "Loowps",
+    "category":      "generator",
+    "isInstrument":  true,
+
+    "resources":     ["*.css", "*.ttf"],
+
+    "source":        [ "CloudChamber.cmajor" ],
+
+    "view":          {
+                         "src": "main.js",
+                         "width": 1240,
+                         "height": 700,
+                         "resizable": true
+                     }
+}

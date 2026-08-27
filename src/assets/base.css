@@ -1,0 +1,149 @@
+/**
+ * No @font-face rules here: a url() in this stylesheet would resolve against the host page rather
+ * than the patch's own resources, so the faces are registered from script - see src/fonts.ts.
+ *
+ * Tokens and base typography sit on <cmaj-view> rather than on :root, so the host page around it
+ * - a DAW window, or another patch's GUI on the same server - keeps its own.
+ */
+cmaj-view {
+  display: block;
+  height: 100%;
+  color: var(--text);
+  background: var(--bg-app);
+  line-height: 1.5;
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  --bg-app: #1b1e23;
+  --bg-panel: #23272e;
+  /* Everything that holds signal rather than chrome - the waveform, the meters, the knob
+     tracks - sits on this, so a reading is always sunk below the surface reporting it. */
+  --bg-sunken: #171a1e;
+  --bg-control: #2c323a;
+  --bg-control-hover: #353c45;
+
+  /* The waveform's own grey. Quiet enough that a grain drawn on top of it in brass is the thing
+     the eye goes to, which is the whole point of drawing the cloud over the source. */
+  --cap-idle: #59616b;
+
+  /* Every track a value rides in - knob arcs, meters, progress. Sunk below the panel so a
+     reading always sits on top of its own well. */
+  --range-track: #242931;
+
+  --border: #363d46;
+  --border-strong: #49515c;
+  /* Parts the bands of one flat surface. Darker than everything it separates, so every join in
+     the window reads as a groove rather than as a rule drawn around a panel. */
+  --seam: #15171b;
+
+  --text: #e7eaee;
+  --text-soft: #bcc4ce;
+  --text-dim: #98a1ac;
+  --text-faint: #6a7380;
+
+  /* Brass carries everything the patch is doing - grains, the scan head, every knob's value.
+     The loop region answers it from the opposite side of the wheel: gold against blue stays
+     separable for colour-blind eyes in a way two warm tones would not. */
+  --accent: #d9a441;
+  --accent-bright: #ecbc62;
+  --accent-dim: #8a6420;
+  /* Warm brown rather than black: at the size a glyph sits on a brass fill, true black reads as
+     stamped on rather than printed, and white washes out entirely. */
+  --accent-ink: #4a3812;
+
+  --marker: #6cb0ee;
+
+  /* Derived so a palette change carries into the washes instead of leaving them behind. */
+  --accent-glow: color-mix(in srgb, var(--accent) 18%, transparent);
+  --accent-wash: color-mix(in srgb, var(--accent) 12%, transparent);
+  --accent-wash-faint: color-mix(in srgb, var(--accent) 4%, transparent);
+
+  /* Sized in px rather than rem: plugin chrome has to hold its proportions whatever the host's
+     webview sets as a root size. */
+  --text-display: 42px;
+  --text-wordmark: 28px;
+  --text-mark: 16px;
+  --text-body: 14px;
+  --text-label: 11px;
+  --text-small: 10px;
+  --text-micro: 9px;
+
+  /* Sentences, labels and controls. Shipped with the patch rather than borrowed from the host, so
+     the plugin measures the same in every DAW; the platform stack behind it is the fallback. */
+  --font-sans:
+    IBMPlexSans, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+
+  /* The brand alone - the mark, and the plugin name beside it. Condensed, so wide tracking reads
+     as deliberate rather than a word coming apart. */
+  --font-display: 'Khand', var(--font-sans);
+
+  /* Anything read as a value rather than a sentence - the version on the about sheet. The host's
+     own monospace, for the same reason the sans stack is the host's. */
+  --font-mono:
+    ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /* Tied to what is moving, so nothing eases for decoration. Signal is linear because it is data;
+     a control easing is a gesture answering the pointer. */
+  --dur-signal: 40ms linear;
+  --dur-control: 90ms ease;
+
+  /* Small for the tracks and the marks that live on them. Base for every control, which is the one
+     radius the chrome uses. Large is left to the sheets, the one thing that floats over the rest. */
+  --radius-sm: 3px;
+  --radius: 4px;
+  --radius-lg: 8px;
+
+  /* Every gap and inset in the UI comes from this scale, so the whole plugin keeps one rhythm. */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 10px;
+  --space-6: 12px;
+  --space-7: 16px;
+  --space-8: 24px;
+
+  --control-inset: var(--space-2) var(--space-4);
+  --band-inset: var(--space-5);
+
+  /* Every control in a parameter band is one row of this height - the reading, the toggle and the
+     track a value rides in alike - so a column of them reads as one ruled list rather than three
+     kinds of thing that happen to be stacked. */
+  --control-height: 22px;
+  /* Square controls - the head switch, and anything else that turns into an icon - all share one
+     size, so a button never has to be measured against the band it happens to be sitting in. */
+  --control-size: 26px;
+  /* Deeper than the 4px groove a parameter row rides in, because the output track carries a
+     reading as well as a setting: the meter needs a bar the eye can judge a level on, and the
+     fader cap has to stand across it without covering it. */
+  --meter-height: 9px;
+  /* Holds the widest reading any parameter produces with room to spare - Density at 200.0 Hz and
+     Output at +12.0 dB both measure 44px, which is a fixed well of 52 exactly, and a reading that
+     exactly fills its well is a reading one rounded pixel away from being clipped. */
+  --readout-width: 58px;
+  /* A ceiling rather than a width. The bands do not hold the same number of groups, so a track
+     left to take its share of one would be twice as long in a band of two as in a band of three -
+     and a gesture that means twice as much in one band as in the next is the one thing a bank of
+     controls must not do. Below the ceiling a track still shrinks with the window. */
+  --track-width: 240px;
+  /* The spread beside a value, where the parameter set names one. Fixed like the reading it
+     annotates, and for the same reason: a column that sized itself to its contents would step
+     sideways as a value was dragged through it. */
+  --spread-width: 66px;
+
+  /* The wider of the two control bands - four groups, fourteen controls and the rules between
+     them. Below this the whole layout scrolls sideways rather than letting a group wrap in half. */
+  --view-min-width: 1120px;
+}
+
+cmaj-view,
+cmaj-view *,
+cmaj-view *::before,
+cmaj-view *::after {
+  box-sizing: border-box;
+  margin: 0;
+  font-weight: normal;
+}

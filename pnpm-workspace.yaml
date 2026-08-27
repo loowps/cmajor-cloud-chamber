@@ -1,0 +1,4 @@
+engineStrict: true
+strictDepBuilds: true
+allowBuilds:
+  '@parcel/watcher': true

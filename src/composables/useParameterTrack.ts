@@ -5,7 +5,7 @@ import {
   valueToNormalised,
   type ParameterDefinition
 } from '@/models/granular.model'
-import { useParameterDrag } from '@/composables/useParameterDrag'
+import { fineAdjustmentDivisor, useParameterDrag } from '@/composables/useParameterDrag'
 
 /// One percent of the range, which is what a wheel notch and an arrow key are both worth.
 const nudgeStep = 0.01
@@ -49,8 +49,12 @@ export function useParameterTrack(
     handlers.end()
   }
 
-  function nudge(steps: number) {
-    commitAsGesture(normalisedToValue(definition(), normalised.value + steps * nudgeStep))
+  /// Shift shortens the step exactly as it slows the drag, so the key means one thing whichever
+  /// way the parameter is being worked.
+  function nudge(steps: number, fine = false) {
+    const step = fine ? nudgeStep / fineAdjustmentDivisor : nudgeStep
+
+    commitAsGesture(normalisedToValue(definition(), normalised.value + steps * step))
   }
 
   /// Reset belongs to the control that shows the range, typing to the one that shows the number,
@@ -61,7 +65,7 @@ export function useParameterTrack(
 
   function onWheel(event: WheelEvent) {
     event.preventDefault()
-    nudge(event.deltaY < 0 ? 1 : -1)
+    nudge(event.deltaY < 0 ? 1 : -1, event.shiftKey)
   }
 
   const trackAttributes = computed(() => ({

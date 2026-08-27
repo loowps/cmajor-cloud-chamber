@@ -93,26 +93,40 @@ describe('useParameterDrag', () => {
   })
 
   it('divides the travel by five while shift is held', () => {
-    const surface = draggableTarget()
-    const startValue = 0
+    const coarse = draggableTarget()
+    const fine = draggableTarget()
 
-    surface.press(pointer('pointerdown', { x: 0 }), pan, startValue, 'x', 60)
-    surface.target.dispatchEvent(pointer('pointermove', { x: 30 }))
-    surface.target.dispatchEvent(pointer('pointermove', { x: 30, shift: true }))
+    coarse.press(pointer('pointerdown', { x: 0 }), pan, 0, 'x', 60)
+    coarse.target.dispatchEvent(pointer('pointermove', { x: 30 }))
 
-    const [coarse, fine] = surface.changes
+    fine.press(pointer('pointerdown', { x: 0 }), pan, 0, 'x', 60)
+    fine.target.dispatchEvent(pointer('pointermove', { x: 30, shift: true }))
 
-    expect(fine - startValue).toBeCloseTo((coarse - startValue) / 5, 6)
+    expect(fine.changes.at(-1)).toBeCloseTo((coarse.changes.at(-1) as number) / 5, 6)
   })
 
-  it('takes shift up mid-drag without a jump, because travel is read per move', () => {
+  it('weighs each move on its own, so shift taken up mid-drag never snaps the value', () => {
     const surface = draggableTarget()
 
     surface.press(pointer('pointerdown', { x: 0 }), pan, 0, 'x', 240)
     surface.target.dispatchEvent(pointer('pointermove', { x: 60, shift: true }))
     surface.target.dispatchEvent(pointer('pointermove', { x: 60 }))
 
-    expect(surface.changes[1]).toBeGreaterThan(surface.changes[0])
+    expect(surface.changes[1]).toBeCloseTo(surface.changes[0], 6)
+
+    surface.target.dispatchEvent(pointer('pointermove', { x: 120 }))
+
+    expect(surface.changes[2] - surface.changes[1]).toBeCloseTo((pan.max - pan.min) / 4, 6)
+  })
+
+  it('clamps as it goes, so a pull past the end comes straight back off it', () => {
+    const surface = draggableTarget()
+
+    surface.press(pointer('pointerdown', { x: 0 }), pan, 0, 'x', 240)
+    surface.target.dispatchEvent(pointer('pointermove', { x: 9999 }))
+    surface.target.dispatchEvent(pointer('pointermove', { x: 9999 - 120 }))
+
+    expect(surface.changes.at(-1)).toBeCloseTo(pan.min + (pan.max - pan.min) / 2, 6)
   })
 
   it('moves along the taper rather than along the value', () => {
@@ -160,5 +174,35 @@ describe('useParameterDrag', () => {
     surface.target.dispatchEvent(pointer('pointermove', { x: 100 }))
 
     expect(surface.changes).toEqual([])
+  })
+
+  /**
+   * Whether a scripted focus draws the ring is Chromium's guess at what the last gesture was, so
+   * without the mark the same drag rings a control or does not depending on what preceded it.
+   */
+  it('marks the focus a drag takes, so the ring is not drawn on it', () => {
+    const surface = draggableTarget()
+
+    surface.press(pointer('pointerdown'), pan, 0, 'x', 240)
+
+    expect(surface.target.hasAttribute('data-pointer-focus')).toBe(true)
+
+    surface.target.dispatchEvent(pointer('pointerup'))
+
+    expect(surface.target.hasAttribute('data-pointer-focus')).toBe(true)
+  })
+
+  it('hands the ring back to the keyboard on the first key, and on losing the focus', () => {
+    const surface = draggableTarget()
+
+    surface.press(pointer('pointerdown'), pan, 0, 'x', 240)
+    surface.target.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }))
+
+    expect(surface.target.hasAttribute('data-pointer-focus')).toBe(false)
+
+    surface.press(pointer('pointerdown'), pan, 0, 'x', 240)
+    surface.target.dispatchEvent(new FocusEvent('blur'))
+
+    expect(surface.target.hasAttribute('data-pointer-focus')).toBe(false)
   })
 })

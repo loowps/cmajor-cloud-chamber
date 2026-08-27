@@ -9,7 +9,7 @@ import {
   valueToNormalised,
   type ParameterDefinition
 } from '@/models/granular.model'
-import { useParameterDrag } from '@/composables/useParameterDrag'
+import { fineAdjustmentDivisor, useParameterDrag } from '@/composables/useParameterDrag'
 
 const {
   definition,
@@ -46,6 +46,9 @@ const emit = defineEmits<{
  * given: a full range in one comfortable pull, which is what the dial it replaced asked for.
  */
 const dragTravel = 190
+
+/// One percent of the range, which is what a wheel notch and an arrow key are both worth.
+const nudgeStep = 0.01
 
 const isEditing = ref(false)
 const draft = ref('')
@@ -96,9 +99,13 @@ function commitAsGesture(next: number) {
   emit('gestureEnd')
 }
 
-function nudge(steps: number) {
+/// Shift shortens the step exactly as it slows the drag, so the key means one thing whichever
+/// way the parameter is being worked.
+function nudge(steps: number, fine = false) {
+  const step = fine ? nudgeStep / fineAdjustmentDivisor : nudgeStep
+
   commitAsGesture(
-    normalisedToValue(definition, valueToNormalised(definition, modelValue) + steps * 0.01)
+    normalisedToValue(definition, valueToNormalised(definition, modelValue) + steps * step)
   )
 }
 
@@ -181,10 +188,10 @@ defineExpose({ beginEditing })
     :title="`${definition.label} — drag to change, double click to type`"
     @pointerdown="onPointerDown"
     @dblclick="beginEditing"
-    @keydown.up.prevent="nudge(1)"
-    @keydown.right.prevent="nudge(1)"
-    @keydown.down.prevent="nudge(-1)"
-    @keydown.left.prevent="nudge(-1)"
+    @keydown.up.prevent="nudge(1, $event.shiftKey)"
+    @keydown.right.prevent="nudge(1, $event.shiftKey)"
+    @keydown.down.prevent="nudge(-1, $event.shiftKey)"
+    @keydown.left.prevent="nudge(-1, $event.shiftKey)"
     @keydown.enter.prevent="beginEditing"
   >
     <span v-if="spread" class="sign">±</span>
@@ -218,7 +225,6 @@ defineExpose({ beginEditing })
   text-align: center;
   color: var(--text);
   white-space: nowrap;
-  user-select: none;
   cursor: ns-resize;
   touch-action: none;
   transition:

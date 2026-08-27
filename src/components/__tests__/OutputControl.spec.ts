@@ -70,6 +70,8 @@ describe('OutputControl', () => {
     expect(track.attributes('aria-valuemax')).toBe(String(gain.max))
   })
 
+  /// The cap and the tip stand on one fraction carried by the track, so the reading can never
+  /// point at a place the cap is not.
   it('stands the cap where the fader is', async () => {
     const store = useGranularStore()
     const wrapper = mount(OutputControl)
@@ -77,7 +79,23 @@ describe('OutputControl', () => {
     store.setParameter('gainIn', 0)
     await wrapper.vm.$nextTick()
 
-    expect(percent(wrapper, '.cap', 'left')).toBeCloseTo(unityPercent, 4)
+    expect(percent(wrapper, '.track', '--cap')).toBeCloseTo(unityPercent, 4)
+  })
+
+  /**
+   * The well is gone, so the tip is the only place the decibels are printed. It is rendered
+   * whatever the pointer is doing - hover, focus and the drag are answered in CSS - because a
+   * reading that only existed while it was shown would be a second thing to keep in step with
+   * the fader.
+   */
+  it('prints the gain over the cap', async () => {
+    const store = useGranularStore()
+    const wrapper = mount(OutputControl)
+
+    store.setParameter('gainIn', 0)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('.tip').text()).toBe('0.0 dB')
   })
 
   /**

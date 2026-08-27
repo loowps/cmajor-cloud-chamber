@@ -84,7 +84,6 @@ function toggle() {
   text-align: center;
   color: var(--text-faint);
   white-space: nowrap;
-  user-select: none;
   cursor: pointer;
   transition:
     background var(--dur-control),

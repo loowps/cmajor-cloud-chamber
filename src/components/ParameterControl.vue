@@ -77,10 +77,10 @@ const thumbOffset = computed(() => `${normalised.value * 100}%`)
       @pointerdown="onPointerDown"
       @dblclick="onDoubleClick"
       @wheel="onWheel"
-      @keydown.up.prevent="nudge(1)"
-      @keydown.right.prevent="nudge(1)"
-      @keydown.down.prevent="nudge(-1)"
-      @keydown.left.prevent="nudge(-1)"
+      @keydown.up.prevent="nudge(1, $event.shiftKey)"
+      @keydown.right.prevent="nudge(1, $event.shiftKey)"
+      @keydown.down.prevent="nudge(-1, $event.shiftKey)"
+      @keydown.left.prevent="nudge(-1, $event.shiftKey)"
       @keydown.enter.prevent="readout?.beginEditing()"
     >
       <div class="fill" :class="{ dragging: isDragging }" :style="fill" />

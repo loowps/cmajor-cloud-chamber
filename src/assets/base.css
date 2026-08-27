@@ -17,6 +17,12 @@ cmaj-view {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 
+  /* Nothing in the window is a document. A selection here is never wanted and is actively in the
+     way: a drag across a band leaves one behind, and the next press inside it begins a native
+     drag of the selection rather than the gesture the control was reaching for. The one place
+     text is typed opts back in - see ParameterReadout.field. */
+  user-select: none;
+
   --bg-app: #1b1e23;
   --bg-panel: #23272e;
   /* Everything that holds signal rather than chrome - the waveform, the meters, the knob
@@ -129,6 +135,11 @@ cmaj-view {
      and a gesture that means twice as much in one band as in the next is the one thing a bank of
      controls must not do. Below the ceiling a track still shrinks with the window. */
   --track-width: 240px;
+  /* The output fader, which is the one track in the window that is not a row in a band. Shorter
+     than those: with its name and its well gone there is nothing beside it for a full-length
+     track to line up with, and nothing else in the footer is swept in turn with it, so its
+     gesture is not being measured against the one next to it the way a bank of rows is. */
+  --output-track-width: 150px;
   /* The spread beside a value, where the parameter set names one. Fixed like the reading it
      annotates, and for the same reason: a column that sized itself to its contents would step
      sideways as a value was dragged through it. */
@@ -136,7 +147,7 @@ cmaj-view {
 
   /* The wider of the two control bands - four groups, fourteen controls and the rules between
      them. Below this the whole layout scrolls sideways rather than letting a group wrap in half. */
-  --view-min-width: 1120px;
+  --view-min-width: 978px;
 }
 
 cmaj-view,

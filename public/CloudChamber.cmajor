@@ -75,7 +75,7 @@ processor CloudChamber [[ main ]]
     input event float32 h1LoopLengthIn       [[ name: "H1 Loop Length", min: 0, max: 1, init: 1, step: 0.0001 ]];
     input event float32 h1SizeIn             [[ name: "H1 Size", min: 1, max: 10000, init: 120, unit: "ms", step: 0.1 ]];
     input event float32 h1SizeJitterIn       [[ name: "H1 Size Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
-    input event float32 h1DensityIn          [[ name: "H1 Density", min: 0.1, max: 200, init: 24, unit: "Hz", step: 0.1 ]];
+    input event float32 h1DensityIn          [[ name: "H1 Density", min: 0.1, max: 1600, init: 24, unit: "Hz", step: 0.1 ]];
     input event float32 h1RateJitterIn       [[ name: "H1 Rate Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
     input event float32 h1ShapeIn            [[ name: "H1 Shape", min: 0, max: 1, init: 1, step: 0.001 ]];
     input event float32 h1SkewIn             [[ name: "H1 Skew", min: 0, max: 1, init: 0.5, step: 0.001 ]];
@@ -97,7 +97,7 @@ processor CloudChamber [[ main ]]
     input event float32 h2LoopLengthIn       [[ name: "H2 Loop Length", min: 0, max: 1, init: 1, step: 0.0001 ]];
     input event float32 h2SizeIn             [[ name: "H2 Size", min: 1, max: 10000, init: 120, unit: "ms", step: 0.1 ]];
     input event float32 h2SizeJitterIn       [[ name: "H2 Size Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
-    input event float32 h2DensityIn          [[ name: "H2 Density", min: 0.1, max: 200, init: 24, unit: "Hz", step: 0.1 ]];
+    input event float32 h2DensityIn          [[ name: "H2 Density", min: 0.1, max: 1600, init: 24, unit: "Hz", step: 0.1 ]];
     input event float32 h2RateJitterIn       [[ name: "H2 Rate Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
     input event float32 h2ShapeIn            [[ name: "H2 Shape", min: 0, max: 1, init: 1, step: 0.001 ]];
     input event float32 h2SkewIn             [[ name: "H2 Skew", min: 0, max: 1, init: 0.5, step: 0.001 ]];
@@ -119,7 +119,7 @@ processor CloudChamber [[ main ]]
     input event float32 h3LoopLengthIn       [[ name: "H3 Loop Length", min: 0, max: 1, init: 1, step: 0.0001 ]];
     input event float32 h3SizeIn             [[ name: "H3 Size", min: 1, max: 10000, init: 120, unit: "ms", step: 0.1 ]];
     input event float32 h3SizeJitterIn       [[ name: "H3 Size Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
-    input event float32 h3DensityIn          [[ name: "H3 Density", min: 0.1, max: 200, init: 24, unit: "Hz", step: 0.1 ]];
+    input event float32 h3DensityIn          [[ name: "H3 Density", min: 0.1, max: 1600, init: 24, unit: "Hz", step: 0.1 ]];
     input event float32 h3RateJitterIn       [[ name: "H3 Rate Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
     input event float32 h3ShapeIn            [[ name: "H3 Shape", min: 0, max: 1, init: 1, step: 0.001 ]];
     input event float32 h3SkewIn             [[ name: "H3 Skew", min: 0, max: 1, init: 0.5, step: 0.001 ]];
@@ -141,7 +141,7 @@ processor CloudChamber [[ main ]]
     input event float32 h4LoopLengthIn       [[ name: "H4 Loop Length", min: 0, max: 1, init: 1, step: 0.0001 ]];
     input event float32 h4SizeIn             [[ name: "H4 Size", min: 1, max: 10000, init: 120, unit: "ms", step: 0.1 ]];
     input event float32 h4SizeJitterIn       [[ name: "H4 Size Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
-    input event float32 h4DensityIn          [[ name: "H4 Density", min: 0.1, max: 200, init: 24, unit: "Hz", step: 0.1 ]];
+    input event float32 h4DensityIn          [[ name: "H4 Density", min: 0.1, max: 1600, init: 24, unit: "Hz", step: 0.1 ]];
     input event float32 h4RateJitterIn       [[ name: "H4 Rate Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
     input event float32 h4ShapeIn            [[ name: "H4 Shape", min: 0, max: 1, init: 1, step: 0.001 ]];
     input event float32 h4SkewIn             [[ name: "H4 Skew", min: 0, max: 1, init: 0.5, step: 0.001 ]];
@@ -163,7 +163,7 @@ processor CloudChamber [[ main ]]
     input event float32 h5LoopLengthIn       [[ name: "H5 Loop Length", min: 0, max: 1, init: 1, step: 0.0001 ]];
     input event float32 h5SizeIn             [[ name: "H5 Size", min: 1, max: 10000, init: 120, unit: "ms", step: 0.1 ]];
     input event float32 h5SizeJitterIn       [[ name: "H5 Size Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
-    input event float32 h5DensityIn          [[ name: "H5 Density", min: 0.1, max: 200, init: 24, unit: "Hz", step: 0.1 ]];
+    input event float32 h5DensityIn          [[ name: "H5 Density", min: 0.1, max: 1600, init: 24, unit: "Hz", step: 0.1 ]];
     input event float32 h5RateJitterIn       [[ name: "H5 Rate Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
     input event float32 h5ShapeIn            [[ name: "H5 Shape", min: 0, max: 1, init: 1, step: 0.001 ]];
     input event float32 h5SkewIn             [[ name: "H5 Skew", min: 0, max: 1, init: 0.5, step: 0.001 ]];
@@ -185,7 +185,7 @@ processor CloudChamber [[ main ]]
     input event float32 h6LoopLengthIn       [[ name: "H6 Loop Length", min: 0, max: 1, init: 1, step: 0.0001 ]];
     input event float32 h6SizeIn             [[ name: "H6 Size", min: 1, max: 10000, init: 120, unit: "ms", step: 0.1 ]];
     input event float32 h6SizeJitterIn       [[ name: "H6 Size Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
-    input event float32 h6DensityIn          [[ name: "H6 Density", min: 0.1, max: 200, init: 24, unit: "Hz", step: 0.1 ]];
+    input event float32 h6DensityIn          [[ name: "H6 Density", min: 0.1, max: 1600, init: 24, unit: "Hz", step: 0.1 ]];
     input event float32 h6RateJitterIn       [[ name: "H6 Rate Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
     input event float32 h6ShapeIn            [[ name: "H6 Shape", min: 0, max: 1, init: 1, step: 0.001 ]];
     input event float32 h6SkewIn             [[ name: "H6 Skew", min: 0, max: 1, init: 0.5, step: 0.001 ]];
@@ -207,7 +207,7 @@ processor CloudChamber [[ main ]]
     input event float32 h7LoopLengthIn       [[ name: "H7 Loop Length", min: 0, max: 1, init: 1, step: 0.0001 ]];
     input event float32 h7SizeIn             [[ name: "H7 Size", min: 1, max: 10000, init: 120, unit: "ms", step: 0.1 ]];
     input event float32 h7SizeJitterIn       [[ name: "H7 Size Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
-    input event float32 h7DensityIn          [[ name: "H7 Density", min: 0.1, max: 200, init: 24, unit: "Hz", step: 0.1 ]];
+    input event float32 h7DensityIn          [[ name: "H7 Density", min: 0.1, max: 1600, init: 24, unit: "Hz", step: 0.1 ]];
     input event float32 h7RateJitterIn       [[ name: "H7 Rate Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
     input event float32 h7ShapeIn            [[ name: "H7 Shape", min: 0, max: 1, init: 1, step: 0.001 ]];
     input event float32 h7SkewIn             [[ name: "H7 Skew", min: 0, max: 1, init: 0.5, step: 0.001 ]];
@@ -229,7 +229,7 @@ processor CloudChamber [[ main ]]
     input event float32 h8LoopLengthIn       [[ name: "H8 Loop Length", min: 0, max: 1, init: 1, step: 0.0001 ]];
     input event float32 h8SizeIn             [[ name: "H8 Size", min: 1, max: 10000, init: 120, unit: "ms", step: 0.1 ]];
     input event float32 h8SizeJitterIn       [[ name: "H8 Size Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
-    input event float32 h8DensityIn          [[ name: "H8 Density", min: 0.1, max: 200, init: 24, unit: "Hz", step: 0.1 ]];
+    input event float32 h8DensityIn          [[ name: "H8 Density", min: 0.1, max: 1600, init: 24, unit: "Hz", step: 0.1 ]];
     input event float32 h8RateJitterIn       [[ name: "H8 Rate Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
     input event float32 h8ShapeIn            [[ name: "H8 Shape", min: 0, max: 1, init: 1, step: 0.001 ]];
     input event float32 h8SkewIn             [[ name: "H8 Skew", min: 0, max: 1, init: 0.5, step: 0.001 ]];
@@ -344,7 +344,7 @@ processor CloudChamber [[ main ]]
         that are sounding cost anything - the ceiling is what the worst case is allowed to reach,
         not what is always running.
     */
-    let maxGrains = 256;
+    let maxGrains = 1024;
 
     /**
         How long a grain takes to cross its region's join, in seconds of the buffer's own rate.
@@ -1004,9 +1004,9 @@ processor CloudChamber [[ main ]]
         **Latched on the grain, unlike everything else Density and Size touch.** The figure is a
         prediction of how many grains a setting will end up sounding at once, so it is only ever
         true of a cloud that setting has had time to build. Applied to grains already in the air
-        it is a prediction about a population that does not exist: pull Density back from 200Hz
-        with 256 ten-second grains still sounding and all 256 are rescaled at once to the gain
-        meant for a cloud of ten, which is a 24dB peak that then decays over the ten seconds the
+        it is a prediction about a population that does not exist: pull Density back from 1600Hz
+        with 1024 ten-second grains still sounding and all 1024 are rescaled at once to the gain
+        meant for a cloud of ten, which is a 30dB peak that then decays over the ten seconds the
         old grains take to die.
 
         Carried instead, each grain keeps the estimate of the cloud it was actually part of. The
@@ -1091,7 +1091,7 @@ processor CloudChamber [[ main ]]
         Re-derived on the parameter rather than on every sample.
 
         A gain is two square roots and a rate is a pow, so following them in the render loop
-        would put both on each of up to 256 grains 48000 times a second, to answer a knob that
+        would put both on each of up to 1024 grains 48000 times a second, to answer a knob that
         moves a handful of times a block. Walked here the pool costs one pass per event and the
         render loop keeps reading the same fields it always did.
     */

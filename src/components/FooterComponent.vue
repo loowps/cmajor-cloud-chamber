@@ -121,6 +121,5 @@ footer {
   margin-bottom: calc(-1 * var(--name-descent));
   text-transform: uppercase;
   white-space: nowrap;
-  user-select: none;
 }
 </style>

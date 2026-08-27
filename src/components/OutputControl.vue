@@ -3,9 +3,13 @@ import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useGranularStore } from '@/stores/granular'
 import { usePatchSync } from '@/composables/usePatchSync'
-import { definitionFor, valueToNormalised, type ParameterDefinition } from '@/models/granular.model'
+import {
+  definitionFor,
+  formatParameter,
+  valueToNormalised,
+  type ParameterDefinition
+} from '@/models/granular.model'
 import { useParameterTrack } from '@/composables/useParameterTrack'
-import ParameterReadout from '@/components/ParameterReadout.vue'
 
 const endpoint = 'gainIn'
 const definition = definitionFor(endpoint) as ParameterDefinition
@@ -53,6 +57,11 @@ const unityOffset = `${unityFraction * 100}%`
 
 const capOffset = computed(() => `${normalised.value * 100}%`)
 
+/// What the well no longer prints. Read whole rather than as a number and a caption, because it is
+/// shown over the cap for as long as a hand is on the fader instead of standing in a column of
+/// other readings that all have to measure the same.
+const gainText = computed(() => formatParameter(definition, gain.value))
+
 /**
  * Only the part standing above the mark is painted, so the white is the overshoot itself rather
  * than a colour the whole reading takes on: how far past unity it went is the thing worth seeing,
@@ -79,41 +88,36 @@ const lanes = computed(() => [
 </script>
 
 <template>
-  <div class="output">
-    <span class="label">Output</span>
-
-    <ParameterReadout
-      :definition="definition"
-      :model-value="gain"
-      :worked="isDragging"
-      @update:model-value="send"
-      @gesture-start="patchSync.beginGesture(endpoint)"
-      @gesture-end="patchSync.endGesture(endpoint)"
-    />
-
-    <div
-      v-bind="trackAttributes"
-      class="track"
-      :class="{ dragging: isDragging }"
-      :style="{ '--unity': unityOffset }"
-      @pointerdown="onPointerDown"
-      @dblclick="onDoubleClick"
-      @wheel="onWheel"
-      @keydown.up.prevent="nudge(1)"
-      @keydown.right.prevent="nudge(1)"
-      @keydown.down.prevent="nudge(-1)"
-      @keydown.left.prevent="nudge(-1)"
-    >
-      <div class="meter">
-        <div v-for="lane in lanes" :key="lane.name" class="lane">
-          <div class="fill" :style="{ width: lane.fill }" />
-          <div v-if="lane.isOver" class="clip" :style="{ width: lane.clip }" />
-        </div>
+  <!--
+    No name and no well. A fader with its own level meter riding in it is the one control in the
+    window that says what it is by what it does, so the word Output was labelling the obvious - and
+    the number is worth reading while the fader is being reached for rather than all session, which
+    is what the tip answers and a well standing open for it did not.
+  -->
+  <div
+    v-bind="trackAttributes"
+    class="track"
+    :class="{ dragging: isDragging }"
+    :style="{ '--unity': unityOffset, '--cap': capOffset }"
+    @pointerdown="onPointerDown"
+    @dblclick="onDoubleClick"
+    @wheel="onWheel"
+    @keydown.up.prevent="nudge(1, $event.shiftKey)"
+    @keydown.right.prevent="nudge(1, $event.shiftKey)"
+    @keydown.down.prevent="nudge(-1, $event.shiftKey)"
+    @keydown.left.prevent="nudge(-1, $event.shiftKey)"
+  >
+    <div class="meter">
+      <div v-for="lane in lanes" :key="lane.name" class="lane">
+        <div class="fill" :style="{ width: lane.fill }" />
+        <div v-if="lane.isOver" class="clip" :style="{ width: lane.clip }" />
       </div>
-
-      <div class="unity" />
-      <div class="cap" :class="{ dragging: isDragging }" :style="{ left: capOffset }" />
     </div>
+
+    <div class="unity" />
+    <div class="cap" :class="{ dragging: isDragging }" />
+
+    <div class="tip" aria-hidden="true">{{ gainText }}</div>
   </div>
 </template>
 
@@ -121,29 +125,15 @@ const lanes = computed(() => [
 /**
  * One control rather than a fader beside a meter: the gain and the level it produces are the same
  * quantity read at two moments, and standing them apart made the bar ask twice about one thing.
- */
-.output {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-}
-
-.label {
-  font-size: var(--text-label);
-  color: var(--text-dim);
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-}
-
-/**
- * The band's own track width, not a share of the bar: a sweep here has to be worth what a sweep
- * in a band is worth, or the one parameter that lives in the frame would answer the same gesture
- * differently from every parameter that does not.
+ *
+ * Shorter than a band's track, which is the one place the window lets a sweep be worth something
+ * else: with the name and the well gone there is nothing left beside it for a full-length track to
+ * be measured against, and a bar of readings is not a bank of controls to be swept in turn.
  */
 .track {
   position: relative;
   flex: none;
-  width: var(--track-width);
+  width: var(--output-track-width);
   height: var(--control-height);
   cursor: grab;
   touch-action: none;
@@ -204,7 +194,7 @@ const lanes = computed(() => [
     var(--text-dim) var(--unity),
     var(--text-dim) 100%
   );
-  background-size: var(--track-width) 100%;
+  background-size: var(--output-track-width) 100%;
   background-repeat: no-repeat;
   transition: width var(--dur-signal);
 }
@@ -242,6 +232,7 @@ const lanes = computed(() => [
  */
 .cap {
   position: absolute;
+  left: var(--cap);
   top: calc(50% - (var(--meter-height) + var(--space-3)) / 2);
   width: 3px;
   height: calc(var(--meter-height) + var(--space-3));
@@ -260,5 +251,45 @@ const lanes = computed(() => [
 .cap.dragging {
   background: var(--accent-bright);
   box-shadow: 0 0 0 6px var(--accent-glow);
+}
+
+/**
+ * The decibels the well used to hold, over the cap that is setting them and gone the rest of the
+ * time. Set from the readout's own tokens because it is the same reading somewhere else, and a
+ * number that changed its measure as it moved would read as a different kind of thing.
+ *
+ * It is floated over the bar rather than kept in it, which is the whole saving: a well has to be
+ * held open at the width of its widest reading whether anything is being set or not, and this is
+ * a value nobody is watching between gestures.
+ *
+ * Clamped half a well in from either end, so at the extremes the tip stands over its own track
+ * instead of leaning into the readings on one side or the signature on the other.
+ */
+.tip {
+  position: absolute;
+  bottom: calc(100% + var(--space-2));
+  left: clamp(calc(var(--readout-width) / 2), var(--cap), calc(100% - var(--readout-width) / 2));
+  transform: translateX(-50%);
+  width: var(--readout-width);
+  border-radius: var(--radius);
+  background: var(--bg-control);
+  font-size: var(--text-label);
+  line-height: var(--control-height);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--text);
+  white-space: nowrap;
+  /// It stands over the track it belongs to, so it can never take a press meant for the fader.
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--dur-control);
+}
+
+/// Focus brings it back for a keyboard user, who has no hover to offer and nothing else to read
+/// the arrow keys off.
+.track:hover .tip,
+.track:focus-visible .tip,
+.track.dragging .tip {
+  opacity: 1;
 }
 </style>

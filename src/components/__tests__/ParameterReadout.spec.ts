@@ -183,6 +183,17 @@ describe('ParameterReadout', () => {
       expect(down).toBeLessThan(0)
     })
 
+    it('takes a fifth of a step while shift is held', async () => {
+      const wrapper = mountReadout({ soleControl: true })
+
+      await wrapper.find('button').trigger('keydown.up')
+      await wrapper.find('button').trigger('keydown.up', { shiftKey: true })
+
+      const [[coarse], [fine]] = wrapper.emitted('update:modelValue') as [number][]
+
+      expect(fine).toBeCloseTo(coarse / 5, 6)
+    })
+
     it('brackets a nudge as a gesture', async () => {
       const wrapper = mountReadout({ soleControl: true })
 

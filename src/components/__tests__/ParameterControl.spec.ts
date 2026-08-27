@@ -122,6 +122,24 @@ describe('ParameterControl', () => {
       expect(emitted[3]).toBeLessThan(0)
     })
 
+    it('takes a fifth of a step while shift is held, on the keys and on the wheel', async () => {
+      const wrapper = mountControl()
+      const track = wrapper.find('.track')
+
+      await track.trigger('keydown.up')
+      await track.trigger('keydown.up', { shiftKey: true })
+      /// Built rather than triggered: test-utils sets its fields by assignment, and a
+      /// MouseEvent's modifier keys are read only.
+      track.element.dispatchEvent(
+        new WheelEvent('wheel', { bubbles: true, deltaY: -1, shiftKey: true })
+      )
+
+      const emitted = (wrapper.emitted('update:modelValue') as [number][]).map(([value]) => value)
+
+      expect(emitted[1]).toBeCloseTo(emitted[0] / 5, 6)
+      expect(emitted[2]).toBeCloseTo(emitted[0] / 5, 6)
+    })
+
     it('nudges on the wheel, and refuses the page a scroll while doing it', async () => {
       const wrapper = mountControl()
 

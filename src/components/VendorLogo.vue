@@ -16,7 +16,6 @@
   letter-spacing: var(--mark-tracking);
   margin-right: calc(-1 * var(--mark-tracking));
   white-space: nowrap;
-  user-select: none;
 }
 
 /**

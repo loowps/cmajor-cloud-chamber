@@ -234,7 +234,7 @@ const headParameterSpecs: HeadParameterSpec[] = [
     label: 'Density',
     group: 'grain',
     min: 0.1,
-    max: 200,
+    max: 1600,
     initial: 24,
     unit: 'Hz',
     decimals: 1,
@@ -482,7 +482,7 @@ export const parameterBands: ParameterGroup[][] = [
 /**
  * A track runs in a straight line; the value under it need not. Where a definition names a
  * centre, the taper is the power that puts that value at half travel, which is what makes the
- * useful half of a range like 0.1..200Hz occupy half the track rather than a tenth of it.
+ * useful half of a range like 0.1..1600Hz occupy half the track rather than a tenth of it.
  */
 function taperFor(definition: ParameterDefinition): number {
   if (definition.centre === undefined) {

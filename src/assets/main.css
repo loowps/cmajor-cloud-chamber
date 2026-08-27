@@ -1,0 +1,27 @@
+@import './base.css';
+
+cmaj-view button {
+  font-family: inherit;
+}
+
+cmaj-view input {
+  font-family: inherit;
+}
+
+/**
+ * One focus ring for every control that can take focus, not just the ones that remembered to ask.
+ * Kept as an outline so it is drawn outside the control and cannot shift anything around it.
+ */
+cmaj-view :focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/**
+ * Except where the pointer took it. A control being dragged already says so in its own fill or
+ * ring, so an outline there is a second answer to a question nobody asked - and one that comes and
+ * goes with whatever was clicked before it.
+ */
+cmaj-view [data-pointer-focus]:focus-visible {
+  outline: none;
+}

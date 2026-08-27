@@ -1,0 +1,1557 @@
+/**
+    Cloud Chamber - a granular synthesiser.
+
+    A cloud of short grains read out of one mono buffer. Grains are the only thing that makes
+    sound: there is no oscillator behind them, so every parameter here is either about where a
+    grain is taken from, how long it lasts, or how it is shaped on the way out.
+
+    Eight independent playheads read that one buffer. A head owns its own loop region, its own
+    position and motion through it, and its own grain character - size, density, pitch, shape,
+    spray, pan and level - so one head can crawl through a long tail in half-second grains while
+    another stutters through the attack an octave up. They are layers rather than voices: every
+    note plays every enabled head, and the eight are summed.
+
+    The buffer is filled from the editor rather than from the manifest, because the sample is
+    dragged in at runtime. It arrives as a run of chunk events between a sampleBeginIn and a
+    sampleEndIn that arms it, so a half-transferred sample is never read. The buffer is mono -
+    stereo width comes from panning grains apart, which is both cheaper and, for a drone, wider
+    than the source ever was.
+
+    maxSampleFrames is the one hard limit. The editor resamples whatever is dropped so that it
+    fits, which means a short sample keeps its own rate and a very long one is brought down until
+    it does - the buffer carries its own rate in bufferRate, and grain playback is a ratio, so
+    nothing downstream needs to know which happened.
+
+    Two ways to play:
+
+      - MIDI. A note takes a voice, transposes every enabled head by its distance from the root
+        note and opens that voice's amplitude envelope.
+      - Free run. One extra voice, outside the MIDI pool, held permanently open at the root note.
+        This is the drone: the heads keep moving, grains keep being thrown, and no note is needed
+        for any of it.
+
+    Each grain samples every parameter once, when it is spawned, and then carries those values to
+    its end. That is what makes the jitter controls behave: a grain does not change its mind
+    halfway through, so raising Spray widens the cloud rather than smearing the grains already in
+    it.
+*/
+processor CloudChamber [[ main ]]
+{
+    //==============================================================================
+    input event std::midi::Message midiIn [[ name: "MIDI In" ]];
+
+    output stream float32<2> out [[ name: "Audio Out" ]];
+
+    /// At most one grain every grainEmitHz, so the cloud can be drawn without the event queue
+    /// having to carry every grain a dense setting produces.
+    output event GrainInfo grainOut;
+
+    /// Where every head has reached and how loud the cloud is, on a display clock.
+    output event EngineState stateOut;
+
+    /**
+        How far the transfer has actually landed, reported as each chunk is taken off the queue.
+
+        The editor paces itself against this rather than against a timer. Sending faster than the
+        engine drains leaves the host's message thread retrying against a queue it cannot empty,
+        and in a plugin that thread is the one drawing the window - which is why a load used to
+        freeze the whole GUI until it finished.
+    */
+    output event int32 sampleProgressOut;
+
+    //==============================================================================
+    // Per-head parameters. Declared one at a time because top-level arrays of inputs are not
+    // implemented in the language yet; everything downstream of the handlers is array-indexed.
+
+    // Head 1
+    input event float32 h1EnableIn           [[ name: "H1 Enable", min: 0, max: 1, init: 1, text: "Off|On", boolean ]];
+    input event float32 h1LevelIn            [[ name: "H1 Level", min: -60, max: 6, init: -6, unit: "dB", step: 0.1 ]];
+    input event float32 h1PanIn              [[ name: "H1 Pan", min: -1, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h1PanSpreadIn        [[ name: "H1 Pan Spread", min: 0, max: 1, init: 0.4, step: 0.001 ]];
+    input event float32 h1PositionIn         [[ name: "H1 Position", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h1SprayIn            [[ name: "H1 Spray", min: 0, max: 1, init: 0.02, step: 0.001 ]];
+    input event float32 h1MotionIn           [[ name: "H1 Motion", min: -4, max: 4, init: 0.25, unit: "x", step: 0.001 ]];
+    input event float32 h1LoopStartIn        [[ name: "H1 Loop Start", min: 0, max: 1, init: 0, step: 0.0001 ]];
+    input event float32 h1LoopLengthIn       [[ name: "H1 Loop Length", min: 0, max: 1, init: 1, step: 0.0001 ]];
+    input event float32 h1SizeIn             [[ name: "H1 Size", min: 1, max: 10000, init: 120, unit: "ms", step: 0.1 ]];
+    input event float32 h1SizeJitterIn       [[ name: "H1 Size Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h1DensityIn          [[ name: "H1 Density", min: 0.1, max: 1600, init: 24, unit: "Hz", step: 0.1 ]];
+    input event float32 h1RateJitterIn       [[ name: "H1 Rate Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h1ShapeIn            [[ name: "H1 Shape", min: 0, max: 1, init: 1, step: 0.001 ]];
+    input event float32 h1SkewIn             [[ name: "H1 Skew", min: 0, max: 1, init: 0.5, step: 0.001 ]];
+    input event float32 h1PitchIn            [[ name: "H1 Pitch", min: -24, max: 24, init: 0, unit: "st", step: 1 ]];
+    input event float32 h1FineIn             [[ name: "H1 Fine", min: -100, max: 100, init: 0, unit: "ct", step: 0.1 ]];
+    input event float32 h1PitchJitterIn      [[ name: "H1 Pitch Jitter", min: 0, max: 1200, init: 0, unit: "ct", step: 1 ]];
+    input event float32 h1ReverseIn          [[ name: "H1 Reverse", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h1LevelJitterIn      [[ name: "H1 Level Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
+
+    // Head 2
+    input event float32 h2EnableIn           [[ name: "H2 Enable", min: 0, max: 1, init: 0, text: "Off|On", boolean ]];
+    input event float32 h2LevelIn            [[ name: "H2 Level", min: -60, max: 6, init: -6, unit: "dB", step: 0.1 ]];
+    input event float32 h2PanIn              [[ name: "H2 Pan", min: -1, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h2PanSpreadIn        [[ name: "H2 Pan Spread", min: 0, max: 1, init: 0.4, step: 0.001 ]];
+    input event float32 h2PositionIn         [[ name: "H2 Position", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h2SprayIn            [[ name: "H2 Spray", min: 0, max: 1, init: 0.02, step: 0.001 ]];
+    input event float32 h2MotionIn           [[ name: "H2 Motion", min: -4, max: 4, init: 0.25, unit: "x", step: 0.001 ]];
+    input event float32 h2LoopStartIn        [[ name: "H2 Loop Start", min: 0, max: 1, init: 0, step: 0.0001 ]];
+    input event float32 h2LoopLengthIn       [[ name: "H2 Loop Length", min: 0, max: 1, init: 1, step: 0.0001 ]];
+    input event float32 h2SizeIn             [[ name: "H2 Size", min: 1, max: 10000, init: 120, unit: "ms", step: 0.1 ]];
+    input event float32 h2SizeJitterIn       [[ name: "H2 Size Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h2DensityIn          [[ name: "H2 Density", min: 0.1, max: 1600, init: 24, unit: "Hz", step: 0.1 ]];
+    input event float32 h2RateJitterIn       [[ name: "H2 Rate Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h2ShapeIn            [[ name: "H2 Shape", min: 0, max: 1, init: 1, step: 0.001 ]];
+    input event float32 h2SkewIn             [[ name: "H2 Skew", min: 0, max: 1, init: 0.5, step: 0.001 ]];
+    input event float32 h2PitchIn            [[ name: "H2 Pitch", min: -24, max: 24, init: 0, unit: "st", step: 1 ]];
+    input event float32 h2FineIn             [[ name: "H2 Fine", min: -100, max: 100, init: 0, unit: "ct", step: 0.1 ]];
+    input event float32 h2PitchJitterIn      [[ name: "H2 Pitch Jitter", min: 0, max: 1200, init: 0, unit: "ct", step: 1 ]];
+    input event float32 h2ReverseIn          [[ name: "H2 Reverse", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h2LevelJitterIn      [[ name: "H2 Level Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
+
+    // Head 3
+    input event float32 h3EnableIn           [[ name: "H3 Enable", min: 0, max: 1, init: 0, text: "Off|On", boolean ]];
+    input event float32 h3LevelIn            [[ name: "H3 Level", min: -60, max: 6, init: -6, unit: "dB", step: 0.1 ]];
+    input event float32 h3PanIn              [[ name: "H3 Pan", min: -1, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h3PanSpreadIn        [[ name: "H3 Pan Spread", min: 0, max: 1, init: 0.4, step: 0.001 ]];
+    input event float32 h3PositionIn         [[ name: "H3 Position", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h3SprayIn            [[ name: "H3 Spray", min: 0, max: 1, init: 0.02, step: 0.001 ]];
+    input event float32 h3MotionIn           [[ name: "H3 Motion", min: -4, max: 4, init: 0.25, unit: "x", step: 0.001 ]];
+    input event float32 h3LoopStartIn        [[ name: "H3 Loop Start", min: 0, max: 1, init: 0, step: 0.0001 ]];
+    input event float32 h3LoopLengthIn       [[ name: "H3 Loop Length", min: 0, max: 1, init: 1, step: 0.0001 ]];
+    input event float32 h3SizeIn             [[ name: "H3 Size", min: 1, max: 10000, init: 120, unit: "ms", step: 0.1 ]];
+    input event float32 h3SizeJitterIn       [[ name: "H3 Size Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h3DensityIn          [[ name: "H3 Density", min: 0.1, max: 1600, init: 24, unit: "Hz", step: 0.1 ]];
+    input event float32 h3RateJitterIn       [[ name: "H3 Rate Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h3ShapeIn            [[ name: "H3 Shape", min: 0, max: 1, init: 1, step: 0.001 ]];
+    input event float32 h3SkewIn             [[ name: "H3 Skew", min: 0, max: 1, init: 0.5, step: 0.001 ]];
+    input event float32 h3PitchIn            [[ name: "H3 Pitch", min: -24, max: 24, init: 0, unit: "st", step: 1 ]];
+    input event float32 h3FineIn             [[ name: "H3 Fine", min: -100, max: 100, init: 0, unit: "ct", step: 0.1 ]];
+    input event float32 h3PitchJitterIn      [[ name: "H3 Pitch Jitter", min: 0, max: 1200, init: 0, unit: "ct", step: 1 ]];
+    input event float32 h3ReverseIn          [[ name: "H3 Reverse", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h3LevelJitterIn      [[ name: "H3 Level Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
+
+    // Head 4
+    input event float32 h4EnableIn           [[ name: "H4 Enable", min: 0, max: 1, init: 0, text: "Off|On", boolean ]];
+    input event float32 h4LevelIn            [[ name: "H4 Level", min: -60, max: 6, init: -6, unit: "dB", step: 0.1 ]];
+    input event float32 h4PanIn              [[ name: "H4 Pan", min: -1, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h4PanSpreadIn        [[ name: "H4 Pan Spread", min: 0, max: 1, init: 0.4, step: 0.001 ]];
+    input event float32 h4PositionIn         [[ name: "H4 Position", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h4SprayIn            [[ name: "H4 Spray", min: 0, max: 1, init: 0.02, step: 0.001 ]];
+    input event float32 h4MotionIn           [[ name: "H4 Motion", min: -4, max: 4, init: 0.25, unit: "x", step: 0.001 ]];
+    input event float32 h4LoopStartIn        [[ name: "H4 Loop Start", min: 0, max: 1, init: 0, step: 0.0001 ]];
+    input event float32 h4LoopLengthIn       [[ name: "H4 Loop Length", min: 0, max: 1, init: 1, step: 0.0001 ]];
+    input event float32 h4SizeIn             [[ name: "H4 Size", min: 1, max: 10000, init: 120, unit: "ms", step: 0.1 ]];
+    input event float32 h4SizeJitterIn       [[ name: "H4 Size Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h4DensityIn          [[ name: "H4 Density", min: 0.1, max: 1600, init: 24, unit: "Hz", step: 0.1 ]];
+    input event float32 h4RateJitterIn       [[ name: "H4 Rate Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h4ShapeIn            [[ name: "H4 Shape", min: 0, max: 1, init: 1, step: 0.001 ]];
+    input event float32 h4SkewIn             [[ name: "H4 Skew", min: 0, max: 1, init: 0.5, step: 0.001 ]];
+    input event float32 h4PitchIn            [[ name: "H4 Pitch", min: -24, max: 24, init: 0, unit: "st", step: 1 ]];
+    input event float32 h4FineIn             [[ name: "H4 Fine", min: -100, max: 100, init: 0, unit: "ct", step: 0.1 ]];
+    input event float32 h4PitchJitterIn      [[ name: "H4 Pitch Jitter", min: 0, max: 1200, init: 0, unit: "ct", step: 1 ]];
+    input event float32 h4ReverseIn          [[ name: "H4 Reverse", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h4LevelJitterIn      [[ name: "H4 Level Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
+
+    // Head 5
+    input event float32 h5EnableIn           [[ name: "H5 Enable", min: 0, max: 1, init: 0, text: "Off|On", boolean ]];
+    input event float32 h5LevelIn            [[ name: "H5 Level", min: -60, max: 6, init: -6, unit: "dB", step: 0.1 ]];
+    input event float32 h5PanIn              [[ name: "H5 Pan", min: -1, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h5PanSpreadIn        [[ name: "H5 Pan Spread", min: 0, max: 1, init: 0.4, step: 0.001 ]];
+    input event float32 h5PositionIn         [[ name: "H5 Position", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h5SprayIn            [[ name: "H5 Spray", min: 0, max: 1, init: 0.02, step: 0.001 ]];
+    input event float32 h5MotionIn           [[ name: "H5 Motion", min: -4, max: 4, init: 0.25, unit: "x", step: 0.001 ]];
+    input event float32 h5LoopStartIn        [[ name: "H5 Loop Start", min: 0, max: 1, init: 0, step: 0.0001 ]];
+    input event float32 h5LoopLengthIn       [[ name: "H5 Loop Length", min: 0, max: 1, init: 1, step: 0.0001 ]];
+    input event float32 h5SizeIn             [[ name: "H5 Size", min: 1, max: 10000, init: 120, unit: "ms", step: 0.1 ]];
+    input event float32 h5SizeJitterIn       [[ name: "H5 Size Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h5DensityIn          [[ name: "H5 Density", min: 0.1, max: 1600, init: 24, unit: "Hz", step: 0.1 ]];
+    input event float32 h5RateJitterIn       [[ name: "H5 Rate Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h5ShapeIn            [[ name: "H5 Shape", min: 0, max: 1, init: 1, step: 0.001 ]];
+    input event float32 h5SkewIn             [[ name: "H5 Skew", min: 0, max: 1, init: 0.5, step: 0.001 ]];
+    input event float32 h5PitchIn            [[ name: "H5 Pitch", min: -24, max: 24, init: 0, unit: "st", step: 1 ]];
+    input event float32 h5FineIn             [[ name: "H5 Fine", min: -100, max: 100, init: 0, unit: "ct", step: 0.1 ]];
+    input event float32 h5PitchJitterIn      [[ name: "H5 Pitch Jitter", min: 0, max: 1200, init: 0, unit: "ct", step: 1 ]];
+    input event float32 h5ReverseIn          [[ name: "H5 Reverse", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h5LevelJitterIn      [[ name: "H5 Level Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
+
+    // Head 6
+    input event float32 h6EnableIn           [[ name: "H6 Enable", min: 0, max: 1, init: 0, text: "Off|On", boolean ]];
+    input event float32 h6LevelIn            [[ name: "H6 Level", min: -60, max: 6, init: -6, unit: "dB", step: 0.1 ]];
+    input event float32 h6PanIn              [[ name: "H6 Pan", min: -1, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h6PanSpreadIn        [[ name: "H6 Pan Spread", min: 0, max: 1, init: 0.4, step: 0.001 ]];
+    input event float32 h6PositionIn         [[ name: "H6 Position", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h6SprayIn            [[ name: "H6 Spray", min: 0, max: 1, init: 0.02, step: 0.001 ]];
+    input event float32 h6MotionIn           [[ name: "H6 Motion", min: -4, max: 4, init: 0.25, unit: "x", step: 0.001 ]];
+    input event float32 h6LoopStartIn        [[ name: "H6 Loop Start", min: 0, max: 1, init: 0, step: 0.0001 ]];
+    input event float32 h6LoopLengthIn       [[ name: "H6 Loop Length", min: 0, max: 1, init: 1, step: 0.0001 ]];
+    input event float32 h6SizeIn             [[ name: "H6 Size", min: 1, max: 10000, init: 120, unit: "ms", step: 0.1 ]];
+    input event float32 h6SizeJitterIn       [[ name: "H6 Size Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h6DensityIn          [[ name: "H6 Density", min: 0.1, max: 1600, init: 24, unit: "Hz", step: 0.1 ]];
+    input event float32 h6RateJitterIn       [[ name: "H6 Rate Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h6ShapeIn            [[ name: "H6 Shape", min: 0, max: 1, init: 1, step: 0.001 ]];
+    input event float32 h6SkewIn             [[ name: "H6 Skew", min: 0, max: 1, init: 0.5, step: 0.001 ]];
+    input event float32 h6PitchIn            [[ name: "H6 Pitch", min: -24, max: 24, init: 0, unit: "st", step: 1 ]];
+    input event float32 h6FineIn             [[ name: "H6 Fine", min: -100, max: 100, init: 0, unit: "ct", step: 0.1 ]];
+    input event float32 h6PitchJitterIn      [[ name: "H6 Pitch Jitter", min: 0, max: 1200, init: 0, unit: "ct", step: 1 ]];
+    input event float32 h6ReverseIn          [[ name: "H6 Reverse", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h6LevelJitterIn      [[ name: "H6 Level Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
+
+    // Head 7
+    input event float32 h7EnableIn           [[ name: "H7 Enable", min: 0, max: 1, init: 0, text: "Off|On", boolean ]];
+    input event float32 h7LevelIn            [[ name: "H7 Level", min: -60, max: 6, init: -6, unit: "dB", step: 0.1 ]];
+    input event float32 h7PanIn              [[ name: "H7 Pan", min: -1, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h7PanSpreadIn        [[ name: "H7 Pan Spread", min: 0, max: 1, init: 0.4, step: 0.001 ]];
+    input event float32 h7PositionIn         [[ name: "H7 Position", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h7SprayIn            [[ name: "H7 Spray", min: 0, max: 1, init: 0.02, step: 0.001 ]];
+    input event float32 h7MotionIn           [[ name: "H7 Motion", min: -4, max: 4, init: 0.25, unit: "x", step: 0.001 ]];
+    input event float32 h7LoopStartIn        [[ name: "H7 Loop Start", min: 0, max: 1, init: 0, step: 0.0001 ]];
+    input event float32 h7LoopLengthIn       [[ name: "H7 Loop Length", min: 0, max: 1, init: 1, step: 0.0001 ]];
+    input event float32 h7SizeIn             [[ name: "H7 Size", min: 1, max: 10000, init: 120, unit: "ms", step: 0.1 ]];
+    input event float32 h7SizeJitterIn       [[ name: "H7 Size Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h7DensityIn          [[ name: "H7 Density", min: 0.1, max: 1600, init: 24, unit: "Hz", step: 0.1 ]];
+    input event float32 h7RateJitterIn       [[ name: "H7 Rate Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h7ShapeIn            [[ name: "H7 Shape", min: 0, max: 1, init: 1, step: 0.001 ]];
+    input event float32 h7SkewIn             [[ name: "H7 Skew", min: 0, max: 1, init: 0.5, step: 0.001 ]];
+    input event float32 h7PitchIn            [[ name: "H7 Pitch", min: -24, max: 24, init: 0, unit: "st", step: 1 ]];
+    input event float32 h7FineIn             [[ name: "H7 Fine", min: -100, max: 100, init: 0, unit: "ct", step: 0.1 ]];
+    input event float32 h7PitchJitterIn      [[ name: "H7 Pitch Jitter", min: 0, max: 1200, init: 0, unit: "ct", step: 1 ]];
+    input event float32 h7ReverseIn          [[ name: "H7 Reverse", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h7LevelJitterIn      [[ name: "H7 Level Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
+
+    // Head 8
+    input event float32 h8EnableIn           [[ name: "H8 Enable", min: 0, max: 1, init: 0, text: "Off|On", boolean ]];
+    input event float32 h8LevelIn            [[ name: "H8 Level", min: -60, max: 6, init: -6, unit: "dB", step: 0.1 ]];
+    input event float32 h8PanIn              [[ name: "H8 Pan", min: -1, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h8PanSpreadIn        [[ name: "H8 Pan Spread", min: 0, max: 1, init: 0.4, step: 0.001 ]];
+    input event float32 h8PositionIn         [[ name: "H8 Position", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h8SprayIn            [[ name: "H8 Spray", min: 0, max: 1, init: 0.02, step: 0.001 ]];
+    input event float32 h8MotionIn           [[ name: "H8 Motion", min: -4, max: 4, init: 0.25, unit: "x", step: 0.001 ]];
+    input event float32 h8LoopStartIn        [[ name: "H8 Loop Start", min: 0, max: 1, init: 0, step: 0.0001 ]];
+    input event float32 h8LoopLengthIn       [[ name: "H8 Loop Length", min: 0, max: 1, init: 1, step: 0.0001 ]];
+    input event float32 h8SizeIn             [[ name: "H8 Size", min: 1, max: 10000, init: 120, unit: "ms", step: 0.1 ]];
+    input event float32 h8SizeJitterIn       [[ name: "H8 Size Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h8DensityIn          [[ name: "H8 Density", min: 0.1, max: 1600, init: 24, unit: "Hz", step: 0.1 ]];
+    input event float32 h8RateJitterIn       [[ name: "H8 Rate Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h8ShapeIn            [[ name: "H8 Shape", min: 0, max: 1, init: 1, step: 0.001 ]];
+    input event float32 h8SkewIn             [[ name: "H8 Skew", min: 0, max: 1, init: 0.5, step: 0.001 ]];
+    input event float32 h8PitchIn            [[ name: "H8 Pitch", min: -24, max: 24, init: 0, unit: "st", step: 1 ]];
+    input event float32 h8FineIn             [[ name: "H8 Fine", min: -100, max: 100, init: 0, unit: "ct", step: 0.1 ]];
+    input event float32 h8PitchJitterIn      [[ name: "H8 Pitch Jitter", min: 0, max: 1200, init: 0, unit: "ct", step: 1 ]];
+    input event float32 h8ReverseIn          [[ name: "H8 Reverse", min: 0, max: 1, init: 0, step: 0.001 ]];
+    input event float32 h8LevelJitterIn      [[ name: "H8 Level Jitter", min: 0, max: 1, init: 0, step: 0.001 ]];
+
+    //==============================================================================
+    // Global parameters - the keyboard and the output, which belong to the instrument rather
+    // than to any one head.
+
+    input event float32 attackIn   [[ name: "Attack",    min: 0,   max: 8000, init: 20,  unit: "ms", step: 1 ]];
+    input event float32 decayIn    [[ name: "Decay",     min: 0,   max: 8000, init: 400, unit: "ms", step: 1 ]];
+    input event float32 sustainIn  [[ name: "Sustain",   min: 0,   max: 1,    init: 1,   step: 0.001 ]];
+    input event float32 releaseIn  [[ name: "Release",   min: 0,   max: 8000, init: 600, unit: "ms", step: 1 ]];
+    input event float32 keyTrackIn [[ name: "Key Track", min: 0,   max: 1,    init: 1,   step: 0.001 ]];
+    input event float32 freeRunIn  [[ name: "Free Run",  min: 0,   max: 1,    init: 0,   text: "Off|On", boolean ]];
+    input event float32 rootNoteIn [[ name: "Root Note", min: 0,   max: 127,  init: 60,  step: 1 ]];
+    input event float32 gainIn     [[ name: "Output",    min: -60, max: 12,   init: -6,  unit: "dB", step: 0.1 ]];
+
+    //==============================================================================
+    // Sample transfer
+
+    input event SampleInfo  sampleBeginIn;
+    input event SampleChunk sampleChunkIn;
+    input event int32       sampleEndIn;
+
+    struct SampleInfo
+    {
+        int32 frameCount;
+        float32 sampleRate;
+    }
+
+    struct SampleChunk
+    {
+        int32 startFrame;
+        int32 frameCount;
+        float32[chunkFrames] frames;
+    }
+
+    struct GrainInfo
+    {
+        /// Where the grain was taken from, as a fraction of the whole buffer.
+        float32 position;
+        float32 lengthSeconds;
+        float32 level;
+        float32 pan;
+        /// Signed, so the editor can draw a reversed grain as running the other way.
+        float32 rate;
+        int32 voice;
+        int32 head;
+    }
+
+    struct EngineState
+    {
+        /// Every head, so the editor draws all eight without having to say which is selected.
+        float32[headCount] headPositions;
+        /**
+            Both sides rather than one number for the pair. Pan Spread scatters a cloud across the
+            image and a head can be panned outright, so the two channels routinely carry different
+            levels - and a single peak of the pair would report the louder side while saying
+            nothing about the quieter one going missing.
+        */
+        float32 levelLeft;
+        float32 levelRight;
+        int32 activeGrains;
+        /// Frames the buffer actually holds, so the editor can confirm what arrived.
+        int32 loadedFrames;
+        /**
+            The rate those frames are held at. The editor cannot work it out on its own after its
+            window has been reopened - the sample it decoded went with the old window, while the
+            buffer did not - and without it a held sample reads as no sample at all.
+        */
+        float32 bufferRate;
+    }
+
+    //==============================================================================
+    /**
+        134MB of float32, which is what buying an hour costs. Anything shorter than
+        maxSampleFrames / bufferRate seconds keeps its own sample rate; past that the editor
+        brings the rate down until it fits, so the hour is real but it is not full bandwidth.
+        Raising this raises the rate a long sample survives at - and the plugin's footprint by
+        four bytes a frame.
+    */
+    let maxSampleFrames = 33554432;
+
+    /// Frames per transfer event. The performer's input queue is 64KB, so a chunk has to stay
+    /// well inside it or the send blocks against a queue it cannot drain fast enough.
+    let chunkFrames = 2048;
+
+    let headCount = 8;
+
+    let midiVoiceCount = 8;
+    /// The free-running voice sits past the MIDI pool so nothing can steal it for a note.
+    let droneVoice = midiVoiceCount;
+    let voiceCount = midiVoiceCount + 1;
+
+    /// One scheduler per voice per head: every head throws its own grains under every note.
+    let schedulerSlots = voiceCount * headCount;
+
+    /**
+        One pool for the whole engine rather than a ration each. A drone at 24Hz with two-second
+        grains wants around fifty at once and a held chord wants none, so partitioning the pool
+        by voice or by head would cap the cases that need the grains in order to reserve slots
+        for cases that are not sounding. It is a ceiling across all heads and all voices at once,
+        which is what eight dense heads under a chord will actually reach.
+
+        Every active grain costs an interpolated read and a window lookup per sample, so
+        this is the one constant here that is paid for in CPU rather than in memory. Only grains
+        that are sounding cost anything - the ceiling is what the worst case is allowed to reach,
+        not what is always running.
+    */
+    let maxGrains = 1024;
+
+    /**
+        How long a grain takes to cross its region's join, in seconds of the buffer's own rate.
+
+        A grain that reaches the end of its region continues at the start of it, and butting the
+        two together is a step in the waveform at whatever amplitude the grain's window has
+        reached - which is a click, and at the head's own wrap it is a click on every grain at
+        once. Cutting to silence instead is the same step with a different destination, and thins
+        the cloud out as well.
+
+        Ten milliseconds is long enough to hide the join on material that has no business looping
+        and short enough not to smear a transient sitting on it. It is capped at half the region
+        below, so the two ends of a short region cannot fade through each other.
+    */
+    let loopCrossfadeSeconds = 0.01;
+
+    /// A raised cosine, sampled once so a grain's edges cost a lookup rather than a cosine.
+    let rampTableSize = 1024;
+
+    let displayHz = 30.0f;
+    let grainEmitHz = 60.0f;
+
+    let envIdle = 0;
+    let envAttack = 1;
+    let envDecay = 2;
+    let envSustain = 3;
+    let envRelease = 4;
+
+    //==============================================================================
+    float32[maxSampleFrames] sampleBuffer;
+    int32   sampleFrameCount;
+    float64 bufferRate = 48000.0;
+    bool    sampleReady;
+
+    float32[rampTableSize] rampTable;
+
+    //==============================================================================
+    struct Grain
+    {
+        bool active;
+        /// Carried on the grain because the pool is shared: a grain outlives its voice's say in
+        /// where it sits, but still has to be under that voice's amplitude envelope.
+        int32 voice;
+        /**
+            Which head placed it, and what it was placed under. A grain follows Level, Pan, Pitch
+            and Size for as long as it sounds rather than keeping whatever those knobs said at
+            the moment it was spawned: a grain runs for up to ten seconds, so a knob turn would
+            otherwise take ten seconds to be heard in full, and longer still before the last
+            grain that predates it has gone.
+
+            What is kept is only what those values cannot be re-derived from - the head to read
+            them off, the note and velocity the grain was sounded at (its voice may have been
+            taken by another note since), and the random draws. A draw is a coin already flipped:
+            the parameter scales it, but turning Pitch Jitter up cannot decide a different one,
+            so the draw persists while the value it is scaled by does not.
+        */
+        int32 head;
+        int32 note;
+        float32 velocity;
+        float32 levelJitterDraw, panDraw, pitchJitterDraw, sizeJitterDraw;
+        /**
+            The cloud this grain was born into, not the one the head is describing now - see
+            headDensityCompensation. It is the one thing derived from Density and Size that does
+            *not* follow them: a grain already sounding is part of the old cloud's count, and
+            rescaling it to the new cloud's estimate is what makes a fast pull-back peak.
+        */
+        float32 densityCompensation;
+        /// Reverse is a probability, so which way it landed is a draw like any other.
+        float64 rateSign;
+        float64 readPos;
+        float64 increment;
+        /// The grain loops this rather than the whole buffer, so a region sounds the same
+        /// wherever in the file it sits - and crossfadeFrames is how long it takes over the join.
+        float64 regionStart;
+        float64 regionLength;
+        float64 crossfadeFrames;
+        float64 envPhase;
+        float64 envDelta;
+        float32 gainLeft;
+        float32 gainRight;
+        float32 attackFraction;
+        float32 decayFraction;
+    }
+
+    Grain[maxGrains] grains;
+
+    //==============================================================================
+    bool[headCount]    headEnabled;
+    float32[headCount] headLevel;
+    float32[headCount] headPan, headPanSpread;
+    float32[headCount] headPosition, headSpray, headMotion;
+    float32[headCount] headLoopStart, headLoopLength;
+    float32[headCount] headSize, headSizeJitter;
+    float32[headCount] headDensity, headRateJitter;
+    float32[headCount] headShape, headSkew;
+    float32[headCount] headPitch, headFine, headPitchJitter;
+    float32[headCount] headReverse, headLevelJitter;
+
+    /**
+        Motion's accumulator, per voice per head. Position anchors it - see readHeadOffset.
+
+        Per voice rather than per head, so a note starts its heads at Position rather than
+        wherever Motion had drifted them to while nothing was sounding. Two presses of the same
+        key then read the same part of the buffer, and a chord's voices drift apart from a shared
+        start instead of sharing one drift.
+    */
+    float64[schedulerSlots] headScanFrames;
+
+    //==============================================================================
+    bool[voiceCount]    voiceActive;
+    int32[voiceCount]   voiceNote;
+    float32[voiceCount] voiceVelocity;
+    float32[voiceCount] voiceEnvLevel;
+    int32[voiceCount]   voiceEnvStage;
+    /// Rising with every allocation, so the oldest voice is the one stolen.
+    int64[voiceCount]   voiceStartedAt;
+
+    int64 voiceClock;
+
+    /**
+        How far a voice's head is towards its next grain, counted 0..1 rather than in frames left.
+
+        A countdown in frames has to be committed the moment a grain fires, from whatever Density
+        was current then - so at 1Hz, turning the knob up would not be heard until the second the
+        head had already promised itself had run out. A phase changes speed the instant the
+        parameter does, which is what a rate control is supposed to do.
+    */
+    float64[schedulerSlots] spawnPhase;
+
+    /// The jitter drawn for the interval now running. Held rather than redrawn per frame, so
+    /// Rate Jitter still moves whole grains around instead of dithering the phase.
+    float64[schedulerSlots] intervalScale;
+
+    //==============================================================================
+    float32 paramAttack = 20.0f, paramDecay = 400.0f, paramSustain = 1.0f, paramRelease = 600.0f;
+    float32 paramKeyTrack = 1.0f;
+    int32   paramRootNote = 60;
+    bool    paramFreeRun;
+
+    float32 targetGain = 0.501187f;
+    float32 smoothedGain = 0.501187f;
+
+    /// Derived from the host rate in main(), not a bare constant: a fixed per-sample coefficient
+    /// smooths twice as fast at 96k as at 48k, so the same move would sound different per session.
+    float32 gainSmoothingCoefficient = 0.001f;
+
+    float64 displayCountdown, grainEmitCountdown;
+    float32 peakLeft, peakRight;
+
+    std::random::RNG rng;
+
+    //==============================================================================
+    // Per-head parameter handlers. Position re-anchors its own head's drift rather than adding
+    // to it: without that, Position 0 means the loop start only until Motion has moved anything.
+    //
+    // The ones that refresh are the ones a sounding grain follows rather than having snapshotted
+    // - see refreshHeadGains for why the work is done here and not in the render loop.
+
+    event h1EnableIn (float32 v) { headEnabled.at (0) = v >= 0.5f; }
+    event h1LevelIn (float32 v) { headLevel.at (0) = std::levels::dBtoGain (v); refreshHeadGains (0); }
+    event h1PanIn (float32 v) { headPan.at (0) = v; refreshHeadGains (0); }
+    event h1PanSpreadIn (float32 v) { headPanSpread.at (0) = v; refreshHeadGains (0); }
+    event h1PositionIn (float32 v) { headPosition.at (0) = v; anchorHead (0); }
+    event h1SprayIn (float32 v) { headSpray.at (0) = v; }
+    event h1MotionIn (float32 v) { headMotion.at (0) = v; }
+    event h1LoopStartIn (float32 v) { headLoopStart.at (0) = v; }
+    event h1LoopLengthIn (float32 v) { headLoopLength.at (0) = v; }
+    event h1SizeIn (float32 v) { headSize.at (0) = v; refreshHeadLengths (0); }
+    event h1SizeJitterIn (float32 v) { headSizeJitter.at (0) = v; refreshHeadLengths (0); }
+    event h1DensityIn (float32 v) { headDensity.at (0) = v; }
+    event h1RateJitterIn (float32 v) { headRateJitter.at (0) = v; }
+    event h1ShapeIn (float32 v) { headShape.at (0) = v; }
+    event h1SkewIn (float32 v) { headSkew.at (0) = v; }
+    event h1PitchIn (float32 v) { headPitch.at (0) = v; refreshHeadRates (0); }
+    event h1FineIn (float32 v) { headFine.at (0) = v; refreshHeadRates (0); }
+    event h1PitchJitterIn (float32 v) { headPitchJitter.at (0) = v; refreshHeadRates (0); }
+    event h1ReverseIn (float32 v) { headReverse.at (0) = v; }
+    event h1LevelJitterIn (float32 v) { headLevelJitter.at (0) = v; refreshHeadGains (0); }
+
+    event h2EnableIn (float32 v) { headEnabled.at (1) = v >= 0.5f; }
+    event h2LevelIn (float32 v) { headLevel.at (1) = std::levels::dBtoGain (v); refreshHeadGains (1); }
+    event h2PanIn (float32 v) { headPan.at (1) = v; refreshHeadGains (1); }
+    event h2PanSpreadIn (float32 v) { headPanSpread.at (1) = v; refreshHeadGains (1); }
+    event h2PositionIn (float32 v) { headPosition.at (1) = v; anchorHead (1); }
+    event h2SprayIn (float32 v) { headSpray.at (1) = v; }
+    event h2MotionIn (float32 v) { headMotion.at (1) = v; }
+    event h2LoopStartIn (float32 v) { headLoopStart.at (1) = v; }
+    event h2LoopLengthIn (float32 v) { headLoopLength.at (1) = v; }
+    event h2SizeIn (float32 v) { headSize.at (1) = v; refreshHeadLengths (1); }
+    event h2SizeJitterIn (float32 v) { headSizeJitter.at (1) = v; refreshHeadLengths (1); }
+    event h2DensityIn (float32 v) { headDensity.at (1) = v; }
+    event h2RateJitterIn (float32 v) { headRateJitter.at (1) = v; }
+    event h2ShapeIn (float32 v) { headShape.at (1) = v; }
+    event h2SkewIn (float32 v) { headSkew.at (1) = v; }
+    event h2PitchIn (float32 v) { headPitch.at (1) = v; refreshHeadRates (1); }
+    event h2FineIn (float32 v) { headFine.at (1) = v; refreshHeadRates (1); }
+    event h2PitchJitterIn (float32 v) { headPitchJitter.at (1) = v; refreshHeadRates (1); }
+    event h2ReverseIn (float32 v) { headReverse.at (1) = v; }
+    event h2LevelJitterIn (float32 v) { headLevelJitter.at (1) = v; refreshHeadGains (1); }
+
+    event h3EnableIn (float32 v) { headEnabled.at (2) = v >= 0.5f; }
+    event h3LevelIn (float32 v) { headLevel.at (2) = std::levels::dBtoGain (v); refreshHeadGains (2); }
+    event h3PanIn (float32 v) { headPan.at (2) = v; refreshHeadGains (2); }
+    event h3PanSpreadIn (float32 v) { headPanSpread.at (2) = v; refreshHeadGains (2); }
+    event h3PositionIn (float32 v) { headPosition.at (2) = v; anchorHead (2); }
+    event h3SprayIn (float32 v) { headSpray.at (2) = v; }
+    event h3MotionIn (float32 v) { headMotion.at (2) = v; }
+    event h3LoopStartIn (float32 v) { headLoopStart.at (2) = v; }
+    event h3LoopLengthIn (float32 v) { headLoopLength.at (2) = v; }
+    event h3SizeIn (float32 v) { headSize.at (2) = v; refreshHeadLengths (2); }
+    event h3SizeJitterIn (float32 v) { headSizeJitter.at (2) = v; refreshHeadLengths (2); }
+    event h3DensityIn (float32 v) { headDensity.at (2) = v; }
+    event h3RateJitterIn (float32 v) { headRateJitter.at (2) = v; }
+    event h3ShapeIn (float32 v) { headShape.at (2) = v; }
+    event h3SkewIn (float32 v) { headSkew.at (2) = v; }
+    event h3PitchIn (float32 v) { headPitch.at (2) = v; refreshHeadRates (2); }
+    event h3FineIn (float32 v) { headFine.at (2) = v; refreshHeadRates (2); }
+    event h3PitchJitterIn (float32 v) { headPitchJitter.at (2) = v; refreshHeadRates (2); }
+    event h3ReverseIn (float32 v) { headReverse.at (2) = v; }
+    event h3LevelJitterIn (float32 v) { headLevelJitter.at (2) = v; refreshHeadGains (2); }
+
+    event h4EnableIn (float32 v) { headEnabled.at (3) = v >= 0.5f; }
+    event h4LevelIn (float32 v) { headLevel.at (3) = std::levels::dBtoGain (v); refreshHeadGains (3); }
+    event h4PanIn (float32 v) { headPan.at (3) = v; refreshHeadGains (3); }
+    event h4PanSpreadIn (float32 v) { headPanSpread.at (3) = v; refreshHeadGains (3); }
+    event h4PositionIn (float32 v) { headPosition.at (3) = v; anchorHead (3); }
+    event h4SprayIn (float32 v) { headSpray.at (3) = v; }
+    event h4MotionIn (float32 v) { headMotion.at (3) = v; }
+    event h4LoopStartIn (float32 v) { headLoopStart.at (3) = v; }
+    event h4LoopLengthIn (float32 v) { headLoopLength.at (3) = v; }
+    event h4SizeIn (float32 v) { headSize.at (3) = v; refreshHeadLengths (3); }
+    event h4SizeJitterIn (float32 v) { headSizeJitter.at (3) = v; refreshHeadLengths (3); }
+    event h4DensityIn (float32 v) { headDensity.at (3) = v; }
+    event h4RateJitterIn (float32 v) { headRateJitter.at (3) = v; }
+    event h4ShapeIn (float32 v) { headShape.at (3) = v; }
+    event h4SkewIn (float32 v) { headSkew.at (3) = v; }
+    event h4PitchIn (float32 v) { headPitch.at (3) = v; refreshHeadRates (3); }
+    event h4FineIn (float32 v) { headFine.at (3) = v; refreshHeadRates (3); }
+    event h4PitchJitterIn (float32 v) { headPitchJitter.at (3) = v; refreshHeadRates (3); }
+    event h4ReverseIn (float32 v) { headReverse.at (3) = v; }
+    event h4LevelJitterIn (float32 v) { headLevelJitter.at (3) = v; refreshHeadGains (3); }
+
+    event h5EnableIn (float32 v) { headEnabled.at (4) = v >= 0.5f; }
+    event h5LevelIn (float32 v) { headLevel.at (4) = std::levels::dBtoGain (v); refreshHeadGains (4); }
+    event h5PanIn (float32 v) { headPan.at (4) = v; refreshHeadGains (4); }
+    event h5PanSpreadIn (float32 v) { headPanSpread.at (4) = v; refreshHeadGains (4); }
+    event h5PositionIn (float32 v) { headPosition.at (4) = v; anchorHead (4); }
+    event h5SprayIn (float32 v) { headSpray.at (4) = v; }
+    event h5MotionIn (float32 v) { headMotion.at (4) = v; }
+    event h5LoopStartIn (float32 v) { headLoopStart.at (4) = v; }
+    event h5LoopLengthIn (float32 v) { headLoopLength.at (4) = v; }
+    event h5SizeIn (float32 v) { headSize.at (4) = v; refreshHeadLengths (4); }
+    event h5SizeJitterIn (float32 v) { headSizeJitter.at (4) = v; refreshHeadLengths (4); }
+    event h5DensityIn (float32 v) { headDensity.at (4) = v; }
+    event h5RateJitterIn (float32 v) { headRateJitter.at (4) = v; }
+    event h5ShapeIn (float32 v) { headShape.at (4) = v; }
+    event h5SkewIn (float32 v) { headSkew.at (4) = v; }
+    event h5PitchIn (float32 v) { headPitch.at (4) = v; refreshHeadRates (4); }
+    event h5FineIn (float32 v) { headFine.at (4) = v; refreshHeadRates (4); }
+    event h5PitchJitterIn (float32 v) { headPitchJitter.at (4) = v; refreshHeadRates (4); }
+    event h5ReverseIn (float32 v) { headReverse.at (4) = v; }
+    event h5LevelJitterIn (float32 v) { headLevelJitter.at (4) = v; refreshHeadGains (4); }
+
+    event h6EnableIn (float32 v) { headEnabled.at (5) = v >= 0.5f; }
+    event h6LevelIn (float32 v) { headLevel.at (5) = std::levels::dBtoGain (v); refreshHeadGains (5); }
+    event h6PanIn (float32 v) { headPan.at (5) = v; refreshHeadGains (5); }
+    event h6PanSpreadIn (float32 v) { headPanSpread.at (5) = v; refreshHeadGains (5); }
+    event h6PositionIn (float32 v) { headPosition.at (5) = v; anchorHead (5); }
+    event h6SprayIn (float32 v) { headSpray.at (5) = v; }
+    event h6MotionIn (float32 v) { headMotion.at (5) = v; }
+    event h6LoopStartIn (float32 v) { headLoopStart.at (5) = v; }
+    event h6LoopLengthIn (float32 v) { headLoopLength.at (5) = v; }
+    event h6SizeIn (float32 v) { headSize.at (5) = v; refreshHeadLengths (5); }
+    event h6SizeJitterIn (float32 v) { headSizeJitter.at (5) = v; refreshHeadLengths (5); }
+    event h6DensityIn (float32 v) { headDensity.at (5) = v; }
+    event h6RateJitterIn (float32 v) { headRateJitter.at (5) = v; }
+    event h6ShapeIn (float32 v) { headShape.at (5) = v; }
+    event h6SkewIn (float32 v) { headSkew.at (5) = v; }
+    event h6PitchIn (float32 v) { headPitch.at (5) = v; refreshHeadRates (5); }
+    event h6FineIn (float32 v) { headFine.at (5) = v; refreshHeadRates (5); }
+    event h6PitchJitterIn (float32 v) { headPitchJitter.at (5) = v; refreshHeadRates (5); }
+    event h6ReverseIn (float32 v) { headReverse.at (5) = v; }
+    event h6LevelJitterIn (float32 v) { headLevelJitter.at (5) = v; refreshHeadGains (5); }
+
+    event h7EnableIn (float32 v) { headEnabled.at (6) = v >= 0.5f; }
+    event h7LevelIn (float32 v) { headLevel.at (6) = std::levels::dBtoGain (v); refreshHeadGains (6); }
+    event h7PanIn (float32 v) { headPan.at (6) = v; refreshHeadGains (6); }
+    event h7PanSpreadIn (float32 v) { headPanSpread.at (6) = v; refreshHeadGains (6); }
+    event h7PositionIn (float32 v) { headPosition.at (6) = v; anchorHead (6); }
+    event h7SprayIn (float32 v) { headSpray.at (6) = v; }
+    event h7MotionIn (float32 v) { headMotion.at (6) = v; }
+    event h7LoopStartIn (float32 v) { headLoopStart.at (6) = v; }
+    event h7LoopLengthIn (float32 v) { headLoopLength.at (6) = v; }
+    event h7SizeIn (float32 v) { headSize.at (6) = v; refreshHeadLengths (6); }
+    event h7SizeJitterIn (float32 v) { headSizeJitter.at (6) = v; refreshHeadLengths (6); }
+    event h7DensityIn (float32 v) { headDensity.at (6) = v; }
+    event h7RateJitterIn (float32 v) { headRateJitter.at (6) = v; }
+    event h7ShapeIn (float32 v) { headShape.at (6) = v; }
+    event h7SkewIn (float32 v) { headSkew.at (6) = v; }
+    event h7PitchIn (float32 v) { headPitch.at (6) = v; refreshHeadRates (6); }
+    event h7FineIn (float32 v) { headFine.at (6) = v; refreshHeadRates (6); }
+    event h7PitchJitterIn (float32 v) { headPitchJitter.at (6) = v; refreshHeadRates (6); }
+    event h7ReverseIn (float32 v) { headReverse.at (6) = v; }
+    event h7LevelJitterIn (float32 v) { headLevelJitter.at (6) = v; refreshHeadGains (6); }
+
+    event h8EnableIn (float32 v) { headEnabled.at (7) = v >= 0.5f; }
+    event h8LevelIn (float32 v) { headLevel.at (7) = std::levels::dBtoGain (v); refreshHeadGains (7); }
+    event h8PanIn (float32 v) { headPan.at (7) = v; refreshHeadGains (7); }
+    event h8PanSpreadIn (float32 v) { headPanSpread.at (7) = v; refreshHeadGains (7); }
+    event h8PositionIn (float32 v) { headPosition.at (7) = v; anchorHead (7); }
+    event h8SprayIn (float32 v) { headSpray.at (7) = v; }
+    event h8MotionIn (float32 v) { headMotion.at (7) = v; }
+    event h8LoopStartIn (float32 v) { headLoopStart.at (7) = v; }
+    event h8LoopLengthIn (float32 v) { headLoopLength.at (7) = v; }
+    event h8SizeIn (float32 v) { headSize.at (7) = v; refreshHeadLengths (7); }
+    event h8SizeJitterIn (float32 v) { headSizeJitter.at (7) = v; refreshHeadLengths (7); }
+    event h8DensityIn (float32 v) { headDensity.at (7) = v; }
+    event h8RateJitterIn (float32 v) { headRateJitter.at (7) = v; }
+    event h8ShapeIn (float32 v) { headShape.at (7) = v; }
+    event h8SkewIn (float32 v) { headSkew.at (7) = v; }
+    event h8PitchIn (float32 v) { headPitch.at (7) = v; refreshHeadRates (7); }
+    event h8FineIn (float32 v) { headFine.at (7) = v; refreshHeadRates (7); }
+    event h8PitchJitterIn (float32 v) { headPitchJitter.at (7) = v; refreshHeadRates (7); }
+    event h8ReverseIn (float32 v) { headReverse.at (7) = v; }
+    event h8LevelJitterIn (float32 v) { headLevelJitter.at (7) = v; refreshHeadGains (7); }
+
+    //==============================================================================
+    event attackIn   (float32 v) { paramAttack = v; }
+    event decayIn    (float32 v) { paramDecay = v; }
+    event sustainIn  (float32 v) { paramSustain = v; }
+    event releaseIn  (float32 v) { paramRelease = v; }
+    event keyTrackIn (float32 v) { paramKeyTrack = v; refreshAllRates(); }
+    event gainIn     (float32 v) { targetGain = std::levels::dBtoGain (v); }
+
+    /**
+        The drone is at the root by definition, so its note has to follow the root rather than
+        having been copied from it when Free Run was switched on. Left stale, raising Root Note
+        transposes the drone *down* by the amount it was raised.
+    */
+    event rootNoteIn (float32 v)
+    {
+        paramRootNote = clamp (int32 (v), 0, 127);
+        voiceNote.at (droneVoice) = paramRootNote;
+
+        /// Its grains carry the root they were sounded at, so they have to move with it too -
+        /// left behind, Key Track reads the gap between the new root and the old one as an
+        /// interval and transposes the cloud away from the note the drone is now at.
+        for (int32 i = 0; i < maxGrains; ++i)
+            if (grains.at (i).active && grains.at (i).voice == droneVoice)
+                grains.at (i).note = paramRootNote;
+
+        refreshAllRates();
+    }
+
+    event freeRunIn (float32 v)
+    {
+        paramFreeRun = v >= 0.5f;
+
+        if (paramFreeRun)
+        {
+            voiceActive.at (droneVoice) = true;
+            voiceNote.at (droneVoice) = paramRootNote;
+            voiceVelocity.at (droneVoice) = 1.0f;
+            voiceEnvStage.at (droneVoice) = envAttack;
+            /// Stamped like a note's, so the newest thing sounding is what the editor draws.
+            voiceStartedAt.at (droneVoice) = ++voiceClock;
+            resetVoiceScheduling (droneVoice);
+        }
+        else if (voiceEnvStage.at (droneVoice) != envIdle)
+        {
+            voiceActive.at (droneVoice) = false;
+            voiceEnvStage.at (droneVoice) = envRelease;
+        }
+    }
+
+    //==============================================================================
+    event midiIn (std::midi::Message message)
+    {
+        if (message.isNoteOn())
+            startNote (message.getNoteNumber(), message.getFloatVelocity());
+        else if (message.isNoteOff())
+            stopNote (message.getNoteNumber());
+    }
+
+    //==============================================================================
+    /**
+        Nothing is cleared here. The buffer is only ever read inside [0, sampleFrameCount), the
+        editor covers exactly that span with chunks, and sampleReady stays false until the last
+        one lands - so whatever the previous sample left behind is overwritten before anything
+        can reach it. Zeroing 134MB would be a stall on the audio thread for no gain.
+    */
+    event sampleBeginIn (SampleInfo info)
+    {
+        sampleReady = false;
+        sampleFrameCount = clamp (info.frameCount, 0, maxSampleFrames);
+        bufferRate = info.sampleRate > 1.0f ? float64 (info.sampleRate) : 48000.0;
+
+        killAllGrains();
+        resetHeads();
+    }
+
+    event sampleChunkIn (SampleChunk chunk)
+    {
+        let count = clamp (chunk.frameCount, 0, chunkFrames);
+
+        for (int32 i = 0; i < count; ++i)
+        {
+            let target = chunk.startFrame + i;
+
+            if (target >= 0 && target < sampleFrameCount)
+                sampleBuffer.at (target) = chunk.frames.at (i);
+        }
+
+        sampleProgressOut <- chunk.startFrame + count;
+    }
+
+    event sampleEndIn (int32 frameCount)
+    {
+        if (frameCount > 0)
+            sampleFrameCount = clamp (frameCount, 0, maxSampleFrames);
+
+        sampleReady = sampleFrameCount > 1;
+        resetHeads();
+    }
+
+    /// Every voice's copy of the head, so Position 0% is the loop start for whatever plays next
+    /// as well as for whatever is sounding now.
+    void anchorHead (int32 head)
+    {
+        for (int32 v = 0; v < voiceCount; ++v)
+            headScanFrames.at (v * headCount + head) = 0.0;
+    }
+
+    /// A voice's heads back at Position. A finished voice is anchored as well as a starting one,
+    /// so a silent window draws where the next note will begin rather than where the last one
+    /// left off.
+    void anchorVoice (int32 voice)
+    {
+        for (int32 h = 0; h < headCount; ++h)
+            headScanFrames.at (voice * headCount + h) = 0.0;
+    }
+
+    void resetHeads()
+    {
+        for (int32 h = 0; h < headCount; ++h)
+            anchorHead (h);
+    }
+
+    //==============================================================================
+    void startNote (int32 note, float32 velocity)
+    {
+        let v = allocateVoice();
+
+        voiceActive.at (v) = true;
+        voiceNote.at (v) = note;
+        voiceVelocity.at (v) = velocity;
+        voiceEnvStage.at (v) = envAttack;
+        voiceStartedAt.at (v) = ++voiceClock;
+
+        resetVoiceScheduling (v);
+    }
+
+    void stopNote (int32 note)
+    {
+        for (int32 i = 0; i < midiVoiceCount; ++i)
+        {
+            if (voiceActive.at (i) && voiceNote.at (i) == note)
+            {
+                voiceActive.at (i) = false;
+                voiceEnvStage.at (i) = envRelease;
+            }
+        }
+    }
+
+    int32 allocateVoice()
+    {
+        int32 oldest = 0;
+        int64 oldestStart = voiceClock + 1;
+
+        for (int32 i = 0; i < midiVoiceCount; ++i)
+        {
+            if (voiceEnvStage.at (i) == envIdle)
+                return i;
+
+            if (voiceStartedAt.at (i) < oldestStart)
+            {
+                oldestStart = voiceStartedAt.at (i);
+                oldest = i;
+            }
+        }
+
+        return oldest;
+    }
+
+    /**
+        Every head starts full, so a note's first grain from each of them lands on the note rather
+        than a Density interval later - and every head starts at Position, so the note reads from
+        where the knob says rather than from wherever Motion had drifted to in the silence.
+
+        Free Run gates the drone through here too, so it begins exactly as a played note does.
+    */
+    void resetVoiceScheduling (int32 voice)
+    {
+        for (int32 h = 0; h < headCount; ++h)
+        {
+            spawnPhase.at (voice * headCount + h) = 1.0;
+            intervalScale.at (voice * headCount + h) = nextIntervalScale (h);
+        }
+
+        anchorVoice (voice);
+    }
+
+    //==============================================================================
+    void buildRampTable()
+    {
+        for (int32 i = 0; i < rampTableSize; ++i)
+            rampTable.at (i) = float32 (0.5 - 0.5 * cos (float64 (i) * (pi / float64 (rampTableSize - 1))));
+    }
+
+    /// The ramp read at a fraction of its own length, so an edge of any duration costs the same.
+    float32 rampAt (float32 fraction)
+    {
+        let index = clamp (fraction, 0.0f, 1.0f) * float32 (rampTableSize - 1);
+        let lower = int32 (index);
+        let upper = min (lower + 1, rampTableSize - 1);
+        let mix = index - float32 (lower);
+
+        return rampTable.at (lower) * (1.0f - mix) + rampTable.at (upper) * mix;
+    }
+
+    /**
+        Shape at 1 is a raised cosine over the whole grain and at 0 is a rectangle, with Skew
+        deciding how whatever ramp is left gets split between the two ends. A grain with no ramp
+        at all clicks, which is the point of having the control - it is a usable sound, not a
+        fault.
+    */
+    float32 grainEnvelope (float64 phase, float32 attackFraction, float32 decayFraction)
+    {
+        let p = float32 (phase);
+
+        if (attackFraction > 0.0f && p < attackFraction)
+            return rampAt (p / attackFraction);
+
+        if (decayFraction > 0.0f && p > 1.0f - decayFraction)
+            return rampAt ((1.0f - p) / decayFraction);
+
+        return 1.0f;
+    }
+
+    //==============================================================================
+    int32 loopStartFrame (int32 head)
+    {
+        return clamp (int32 (headLoopStart.at (head) * float32 (sampleFrameCount)),
+                      0, max (0, sampleFrameCount - 1));
+    }
+
+    int32 loopLengthFrames (int32 head)
+    {
+        let start = loopStartFrame (head);
+        let requested = int32 (headLoopLength.at (head) * float32 (sampleFrameCount));
+
+        return clamp (requested, 1, max (1, sampleFrameCount - start));
+    }
+
+    float64 wrapInto (float64 value, float64 span)
+    {
+        if (span <= 0.0)
+            return 0.0;
+
+        var result = value % span;
+
+        if (result < 0.0)
+            result += span;
+
+        return result;
+    }
+
+    /**
+        Where a head has reached inside its own loop region: Position anchors it, Motion drifts it
+        from there, and the end of the region wraps back to its start. Grains are taken from here
+        and the editor draws it, so the bar on the waveform is the place that head's grains are
+        coming from rather than a second reading that happens to sit nearby.
+    */
+    float64 readHeadOffset (int32 voice, int32 head)
+    {
+        let regionLength = float64 (loopLengthFrames (head));
+
+        return wrapInto (float64 (headPosition.at (head)) * regionLength
+                           + headScanFrames.at (voice * headCount + head),
+                         regionLength);
+    }
+
+    //==============================================================================
+    int32 findFreeGrain()
+    {
+        for (int32 i = 0; i < maxGrains; ++i)
+            if (! grains.at (i).active)
+                return i;
+
+        /// The pool is full, so the grain furthest through its own envelope is the one whose loss
+        /// is least audible - it is already on the way out. Taken across the whole pool rather
+        /// than within a head, so a head that is idle cannot hold slots away from one that is
+        /// asking for them.
+        int32 furthest = 0;
+        float64 furthestPhase = -1.0;
+
+        for (int32 i = 0; i < maxGrains; ++i)
+        {
+            let phase = grains.at (i).envPhase;
+
+            if (phase > furthestPhase)
+            {
+                furthestPhase = phase;
+                furthest = i;
+            }
+        }
+
+        return furthest;
+    }
+
+    void killAllGrains()
+    {
+        for (int32 i = 0; i < maxGrains; ++i)
+            grains.at (i).active = false;
+    }
+
+    /// Scales the interval rather than the rate, so Rate Jitter at full spreads the gaps evenly
+    /// either side of the one Density asks for instead of only ever shortening them.
+    float64 nextIntervalScale (int32 head)
+    {
+        return 1.0 + float64 (headRateJitter.at (head) * rng.getBipolar() * 0.75f);
+    }
+
+    //==============================================================================
+    /**
+        Grains sum, so a head gets louder as well as thicker: how many of its own grains are
+        sounding at once is Density times Size, and at ten seconds a grain that is a swing of
+        thirty decibels across the two knobs. Without this, Density and Size are level controls
+        as much as they are what they say they are, and Level cannot be set until they are.
+
+        The divisor is the **square root** of that overlap, not the overlap itself. Grains drawn
+        from a drifting head at scattered positions are uncorrelated, so they sum in power rather
+        than in amplitude and the total rises as the root of their number - dividing by the
+        number outright would make a thick cloud quieter than a sparse one. It is exact for a
+        cloud that is fully decorrelated and conservative for one that is not: at Spray and
+        Motion both at zero every grain reads the same frames at the same rate, and there some
+        buildup is left in.
+
+        It only ever attenuates. Boosting to hold a level up would put the gain of a lone grain
+        under the count of grains that are not there, which is a swell into every gap in a sparse
+        cloud.
+
+        Clamped at maxGrains because the pool is the real ceiling on the count: past it grains
+        are stolen rather than added, so an estimate that kept climbing would go on turning a
+        head down after it had stopped getting any thicker.
+
+        **Latched on the grain, unlike everything else Density and Size touch.** The figure is a
+        prediction of how many grains a setting will end up sounding at once, so it is only ever
+        true of a cloud that setting has had time to build. Applied to grains already in the air
+        it is a prediction about a population that does not exist: pull Density back from 1600Hz
+        with 1024 ten-second grains still sounding and all 1024 are rescaled at once to the gain
+        meant for a cloud of ten, which is a 30dB peak that then decays over the ten seconds the
+        old grains take to die.
+
+        Carried instead, each grain keeps the estimate of the cloud it was actually part of. The
+        old grains fade out under their own count while the new ones arrive under theirs, each
+        population is normalised against itself, and the total holds flat across the move rather
+        than peaking and settling.
+    */
+    float32 headDensityCompensation (int32 head)
+    {
+        let overlap = headDensity.at (head) * headSize.at (head) * 0.001f;
+
+        return 1.0f / sqrt (clamp (overlap, 1.0f, float32 (maxGrains)));
+    }
+
+    float32 grainLevel (int32 grain)
+    {
+        let head = grains.at (grain).head;
+
+        return grains.at (grain).velocity
+                * headLevel.at (head)
+                * grains.at (grain).densityCompensation
+                * (1.0f - headLevelJitter.at (head) * grains.at (grain).levelJitterDraw);
+    }
+
+    /// The head's own placement, widened by its spread. Clamped because the two together can
+    /// ask for more than the stereo field has.
+    float32 grainPan (int32 grain)
+    {
+        let head = grains.at (grain).head;
+
+        return clamp (headPan.at (head) + headPanSpread.at (head) * grains.at (grain).panDraw,
+                      -1.0f, 1.0f);
+    }
+
+    float64 grainIncrement (int32 grain)
+    {
+        let head = grains.at (grain).head;
+
+        let semitones = headPitch.at (head)
+                         + headFine.at (head) * 0.01f
+                         + headPitchJitter.at (head) * grains.at (grain).pitchJitterDraw * 0.01f
+                         + float32 (grains.at (grain).note - paramRootNote) * paramKeyTrack;
+
+        return grains.at (grain).rateSign
+                * float64 (pow (2.0f, semitones * (1.0f / 12.0f)))
+                * (bufferRate / processor.frequency);
+    }
+
+    void applyGrainGains (int32 grain)
+    {
+        let level = grainLevel (grain);
+        let pan = grainPan (grain);
+
+        grains.at (grain).gainLeft = level * sqrt (0.5f * (1.0f - pan));
+        grains.at (grain).gainRight = level * sqrt (0.5f * (1.0f + pan));
+    }
+
+    /**
+        Size sets the rate the envelope runs at, not where in it a grain has got to.
+
+        envPhase is kept and envDelta rescaled, so a grain half way through is still half way
+        through and only the time it has left changes. The other reading - phase recomputed from
+        the frames already elapsed - ends a shortened grain wherever its window happened to have
+        climbed to, which is a click on every grain at once at the moment the knob moves.
+    */
+    float64 grainLengthSeconds (int32 grain)
+    {
+        let head = grains.at (grain).head;
+        let sizeScale = 1.0 + float64 (headSizeJitter.at (head)
+                                         * grains.at (grain).sizeJitterDraw * 0.9f);
+
+        return max (0.0005, float64 (headSize.at (head)) * 0.001 * sizeScale);
+    }
+
+    void applyGrainLength (int32 grain)
+    {
+        grains.at (grain).envDelta
+            = 1.0 / max (1.0, grainLengthSeconds (grain) * processor.frequency);
+    }
+
+    /**
+        Re-derived on the parameter rather than on every sample.
+
+        A gain is two square roots and a rate is a pow, so following them in the render loop
+        would put both on each of up to 1024 grains 48000 times a second, to answer a knob that
+        moves a handful of times a block. Walked here the pool costs one pass per event and the
+        render loop keeps reading the same fields it always did.
+    */
+    void refreshHeadLengths (int32 head)
+    {
+        for (int32 i = 0; i < maxGrains; ++i)
+            if (grains.at (i).active && grains.at (i).head == head)
+                applyGrainLength (i);
+    }
+
+    void refreshHeadGains (int32 head)
+    {
+        for (int32 i = 0; i < maxGrains; ++i)
+            if (grains.at (i).active && grains.at (i).head == head)
+                applyGrainGains (i);
+    }
+
+    void refreshHeadRates (int32 head)
+    {
+        for (int32 i = 0; i < maxGrains; ++i)
+            if (grains.at (i).active && grains.at (i).head == head)
+                grains.at (i).increment = grainIncrement (i);
+    }
+
+    /// Key Track and Root Note belong to the instrument rather than to a layer, so they move
+    /// every head's grains at once.
+    void refreshAllRates()
+    {
+        for (int32 i = 0; i < maxGrains; ++i)
+            if (grains.at (i).active)
+                grains.at (i).increment = grainIncrement (i);
+    }
+
+    void spawnGrain (int32 voice, int32 head)
+    {
+        if (! sampleReady)
+            return;
+
+        let regionStart = float64 (loopStartFrame (head));
+        let regionLength = float64 (loopLengthFrames (head));
+
+        let sprayOffset = float64 (headSpray.at (head) * rng.getBipolar() * 0.5f) * regionLength;
+        let offsetInRegion = wrapInto (readHeadOffset (voice, head) + sprayOffset, regionLength);
+
+        let sizeJitterDraw = rng.getBipolar();
+        let pitchJitterDraw = rng.getBipolar();
+        let rateSign = rng.getUnipolar() < headReverse.at (head) ? -1.0 : 1.0;
+        let panDraw = rng.getBipolar();
+        let levelJitterDraw = rng.getUnipolar();
+
+        let edge = clamp (headShape.at (head), 0.0f, 1.0f);
+        let skew = clamp (headSkew.at (head), 0.0f, 1.0f);
+
+        let slot = findFreeGrain();
+
+        grains.at (slot).active = true;
+        grains.at (slot).voice = voice;
+        grains.at (slot).head = head;
+        grains.at (slot).note = voiceNote.at (voice);
+        grains.at (slot).velocity = voiceVelocity.at (voice);
+        grains.at (slot).levelJitterDraw = levelJitterDraw;
+        grains.at (slot).panDraw = panDraw;
+        grains.at (slot).pitchJitterDraw = pitchJitterDraw;
+        grains.at (slot).sizeJitterDraw = sizeJitterDraw;
+        grains.at (slot).densityCompensation = headDensityCompensation (head);
+        grains.at (slot).rateSign = rateSign;
+        grains.at (slot).readPos = regionStart + offsetInRegion;
+        grains.at (slot).regionStart = regionStart;
+        grains.at (slot).regionLength = regionLength;
+        grains.at (slot).crossfadeFrames = min (loopCrossfadeSeconds * bufferRate, regionLength * 0.5);
+        grains.at (slot).envPhase = 0.0;
+        grains.at (slot).attackFraction = edge * skew;
+        grains.at (slot).decayFraction = edge * (1.0f - skew);
+
+        applyGrainLength (slot);
+        applyGrainGains (slot);
+        grains.at (slot).increment = grainIncrement (slot);
+
+        emitGrain (grains.at (slot).readPos, grainLengthSeconds (slot), grainLevel (slot),
+                   grainPan (slot), grains.at (slot).increment, voice, head);
+    }
+
+    void emitGrain (float64 readPos, float64 lengthSeconds, float32 level, float32 pan,
+                    float64 increment, int32 voice, int32 head)
+    {
+        if (grainEmitCountdown > 0.0)
+            return;
+
+        grainEmitCountdown = processor.frequency / float64 (grainEmitHz);
+
+        GrainInfo info;
+        info.position = sampleFrameCount > 0 ? float32 (readPos / float64 (sampleFrameCount)) : 0.0f;
+        info.lengthSeconds = float32 (lengthSeconds);
+        info.level = level;
+        info.pan = pan;
+        info.rate = float32 (increment);
+        info.voice = voice;
+        info.head = head;
+
+        grainOut <- info;
+    }
+
+    //==============================================================================
+    /// The neighbours a four-point read needs, held inside the loaded span. One step either way
+    /// is all that is ever asked for, so a comparison is cheaper than a clamp against both ends.
+    int32 edgeIndex (int32 index)
+    {
+        if (index < 0)
+            return 0;
+
+        if (index >= sampleFrameCount)
+            return sampleFrameCount - 1;
+
+        return index;
+    }
+
+    /**
+        Catmull-Rom rather than linear.
+
+        A grain is almost never read at unity - Pitch, Fine, Pitch Jitter and the ratio between
+        the buffer's rate and the host's all land it between samples - so the interpolator is in
+        the signal path continuously rather than occasionally. Linear interpolation is a poor
+        reconstruction filter: it rolls the top octave off and leaves images behind that read as
+        grit on anything transposed. Four points and a cubic cost a handful of multiply-adds per
+        grain and take that grit away.
+
+        It does not, and cannot, fix aliasing from transposing *upward*: past unity the read is
+        undersampling the buffer, and no interpolator recovers what the steps between samples
+        never carried. That needs a band-limited copy to read from, which is a different and far
+        more expensive change.
+
+        Outside the loaded span is silence, not a wrap back to frame zero. A grain reads inside
+        its own region, so the only thing that ever asks for a position outside the span is
+        readGrain's partner read across a join that sits on the start or the end of the file -
+        and answering that with frame zero would splice the two ends of the file together under
+        the fade. Silence makes the join a fade in or out of the material instead.
+    */
+    float32 readBuffer (float64 position)
+    {
+        if (sampleFrameCount < 4)
+            return 0.0f;
+
+        if (position < 0.0 || position >= float64 (sampleFrameCount))
+            return 0.0f;
+
+        let index = int32 (position);
+        let mix = float32 (position - float64 (index));
+
+        let x0 = sampleBuffer.at (edgeIndex (index - 1));
+        let x1 = sampleBuffer.at (index);
+        let x2 = sampleBuffer.at (edgeIndex (index + 1));
+        let x3 = sampleBuffer.at (edgeIndex (index + 2));
+
+        let a = -0.5f * x0 + 1.5f * x1 - 1.5f * x2 + 0.5f * x3;
+        let b = x0 - 2.5f * x1 + 2.0f * x2 - 0.5f * x3;
+        let c = -0.5f * x0 + 0.5f * x2;
+
+        return ((a * mix + b) * mix + c) * mix + x1;
+    }
+
+    /// Equal power rather than equal gain: the two sides of a join are unrelated material, so a
+    /// linear blend of them dips through the middle of the fade instead of holding level.
+    float32 mixAcrossJoin (float32 here, float32 partner, float64 hereWeight)
+    {
+        let w = clamp (float32 (hereWeight), 0.0f, 1.0f);
+
+        return here * sqrt (w) + partner * sqrt (1.0f - w);
+    }
+
+    /**
+        A grain's read: its own loop region, with the join crossfaded.
+
+        The region's last crossfadeFrames are mixed with the frames running up to its start, and
+        its first with the frames running past its end, so both sides of the join are half of
+        each other and the seam is continuous whatever the material either side of it does. The
+        two branches are the same fade seen from either side, which is what lets a reversed grain
+        take it without a case of its own - and what keeps a grain that never crosses the join
+        reading the same edges as one that does.
+
+        Either partner can fall outside the loaded span, where readBuffer answers silence and the
+        join becomes a fade rather than a blend. That is the case a region ending on the end of
+        the file used to click on: the grain now fades over the file's end instead of stepping
+        across it.
+    */
+    float32 readGrain (int32 grain)
+    {
+        let position = grains.at (grain).readPos;
+        let regionLength = grains.at (grain).regionLength;
+        let fade = grains.at (grain).crossfadeFrames;
+        let here = readBuffer (position);
+
+        if (fade <= 0.0)
+            return here;
+
+        let offset = position - grains.at (grain).regionStart;
+
+        if (offset < fade)
+            return mixAcrossJoin (here, readBuffer (position + regionLength),
+                                  0.5 + 0.5 * (offset / fade));
+
+        if (offset > regionLength - fade)
+            return mixAcrossJoin (here, readBuffer (position - regionLength),
+                                  0.5 + 0.5 * ((regionLength - offset) / fade));
+
+        return here;
+    }
+
+    /// The region is what a grain runs round, not the buffer - so the same region sounds the same
+    /// wherever in the file it has been put, and a grain outlives the head that placed it.
+    void advanceGrain (int32 grain)
+    {
+        let offset = grains.at (grain).readPos - grains.at (grain).regionStart
+                       + grains.at (grain).increment;
+
+        grains.at (grain).readPos = grains.at (grain).regionStart
+                                      + wrapInto (offset, grains.at (grain).regionLength);
+    }
+
+    //==============================================================================
+    float32 envelopeRate (float32 milliseconds)
+    {
+        let frames = float64 (max (0.1f, milliseconds)) * 0.001 * processor.frequency;
+        return float32 (1.0 / max (1.0, frames));
+    }
+
+    void advanceVoiceEnvelope (int32 voice)
+    {
+        let stage = voiceEnvStage.at (voice);
+
+        if (stage == envAttack)
+        {
+            voiceEnvLevel.at (voice) += envelopeRate (paramAttack);
+
+            if (voiceEnvLevel.at (voice) >= 1.0f)
+            {
+                voiceEnvLevel.at (voice) = 1.0f;
+                voiceEnvStage.at (voice) = envDecay;
+            }
+        }
+        else if (stage == envDecay)
+        {
+            voiceEnvLevel.at (voice) -= envelopeRate (paramDecay) * (1.0f - paramSustain);
+
+            if (voiceEnvLevel.at (voice) <= paramSustain)
+            {
+                voiceEnvLevel.at (voice) = paramSustain;
+                voiceEnvStage.at (voice) = envSustain;
+            }
+        }
+        else if (stage == envRelease)
+        {
+            voiceEnvLevel.at (voice) -= envelopeRate (paramRelease);
+
+            if (voiceEnvLevel.at (voice) <= 0.0f)
+            {
+                voiceEnvLevel.at (voice) = 0.0f;
+                voiceEnvStage.at (voice) = envIdle;
+                anchorVoice (voice);
+            }
+        }
+    }
+
+    //==============================================================================
+    void scheduleGrains()
+    {
+        for (int32 v = 0; v < voiceCount; ++v)
+        {
+            advanceVoiceEnvelope (v);
+
+            if (voiceEnvStage.at (v) == envIdle)
+                continue;
+
+            for (int32 h = 0; h < headCount; ++h)
+            {
+                if (! headEnabled.at (h))
+                    continue;
+
+                let slot = v * headCount + h;
+
+                spawnPhase.at (slot) += float64 (headDensity.at (h)) * intervalScale.at (slot)
+                                          / processor.frequency;
+
+                if (spawnPhase.at (slot) < 1.0)
+                    continue;
+
+                // Carried rather than reset, so the fraction the phase overshot by is not thrown
+                // away and a fast setting keeps its average rate.
+                spawnPhase.at (slot) -= 1.0;
+                intervalScale.at (slot) = nextIntervalScale (h);
+
+                spawnGrain (v, h);
+            }
+        }
+    }
+
+    //==============================================================================
+    /**
+        Motion drifts a head only while the voice holding it is sounding. Silent, every head stays
+        anchored at Position, so a note reads from where the knob says rather than from wherever
+        the silence had carried it.
+
+        Within a sounding voice every head drifts, enabled or not, so switching one on picks it up
+        where it would have been rather than jumping it back to wherever it was last heard.
+
+        The head loop is the outer one: the region length and the per-frame drift belong to the
+        head, and computing them once for all nine voices keeps this at an add and a wrap per
+        voice.
+    */
+    void advanceScan()
+    {
+        if (! sampleReady)
+            return;
+
+        for (int32 h = 0; h < headCount; ++h)
+        {
+            let regionLength = float64 (loopLengthFrames (h));
+            let drift = float64 (headMotion.at (h)) * (bufferRate / processor.frequency);
+
+            for (int32 v = 0; v < voiceCount; ++v)
+            {
+                if (voiceEnvStage.at (v) == envIdle)
+                    continue;
+
+                let slot = v * headCount + h;
+                headScanFrames.at (slot) = wrapInto (headScanFrames.at (slot) + drift, regionLength);
+            }
+        }
+    }
+
+    /**
+        Whose heads the editor draws. Every voice has its own now, and the window has one line per
+        head - so the newest voice still sounding is the one shown, and a played note takes the
+        line over from the drone and hands it back when it ends.
+
+        With nothing sounding every voice is anchored, so the drone's copy reads out as Position
+        itself: the line rests where the next note will start from.
+    */
+    int32 drawnVoice()
+    {
+        int32 newest = droneVoice;
+        int64 newestStart = -1;
+
+        for (int32 v = 0; v < voiceCount; ++v)
+        {
+            if (voiceEnvStage.at (v) != envIdle && voiceStartedAt.at (v) > newestStart)
+            {
+                newestStart = voiceStartedAt.at (v);
+                newest = v;
+            }
+        }
+
+        return newest;
+    }
+
+    //==============================================================================
+    void reportState()
+    {
+        displayCountdown -= 1.0;
+
+        if (displayCountdown > 0.0)
+            return;
+
+        displayCountdown = processor.frequency / float64 (displayHz);
+
+        int32 active;
+
+        for (int32 i = 0; i < maxGrains; ++i)
+            if (grains.at (i).active)
+                ++active;
+
+        EngineState state;
+
+        let drawn = drawnVoice();
+
+        for (int32 h = 0; h < headCount; ++h)
+            state.headPositions.at (h) = sampleFrameCount > 0
+                                           ? float32 ((float64 (loopStartFrame (h))
+                                                         + readHeadOffset (drawn, h))
+                                                        / float64 (sampleFrameCount))
+                                           : 0.0f;
+
+        state.levelLeft = peakLeft;
+        state.levelRight = peakRight;
+        state.activeGrains = active;
+        state.loadedFrames = sampleReady ? sampleFrameCount : 0;
+        state.bufferRate = float32 (bufferRate);
+
+        stateOut <- state;
+        peakLeft = 0.0f;
+        peakRight = 0.0f;
+    }
+
+    //==============================================================================
+    /// About how long the output gain takes to reach a new setting.
+    let gainSmoothingSeconds = 0.02;
+
+    void main()
+    {
+        buildRampTable();
+
+        /**
+            Unseeded, every instance of the patch runs the same sequence - so two Cloud Chamber tracks
+            would jitter their grains in lockstep and sound like one wide instrument rather than
+            two. processor.id separates the instances; processor.session makes the cloud differ
+            from one run to the next rather than being the same performance every time.
+        */
+        rng.seed (int64 (processor.session) * 8191L + int64 (processor.id));
+
+        gainSmoothingCoefficient = float32 (1.0 / max (1.0, gainSmoothingSeconds * processor.frequency));
+
+        /// A scale of zero would stall a phase outright, and no scheduler must be able to open
+        /// onto one - so they start at the value a head with no jitter would draw.
+        for (int32 i = 0; i < schedulerSlots; ++i)
+            intervalScale.at (i) = 1.0;
+
+        loop
+        {
+            scheduleGrains();
+
+            float32 left, right;
+
+            for (int32 i = 0; i < maxGrains; ++i)
+            {
+                if (! grains.at (i).active)
+                    continue;
+
+                let window = grainEnvelope (grains.at (i).envPhase,
+                                            grains.at (i).attackFraction,
+                                            grains.at (i).decayFraction);
+
+                let voiceEnvelope = voiceEnvLevel.at (grains.at (i).voice);
+                let sample = readGrain (i) * window * voiceEnvelope;
+
+                left += sample * grains.at (i).gainLeft;
+                right += sample * grains.at (i).gainRight;
+
+                advanceGrain (i);
+                grains.at (i).envPhase += grains.at (i).envDelta;
+
+                if (grains.at (i).envPhase >= 1.0)
+                    grains.at (i).active = false;
+            }
+
+            smoothedGain += (targetGain - smoothedGain) * gainSmoothingCoefficient;
+
+            left *= smoothedGain;
+            right *= smoothedGain;
+
+            peakLeft = max (peakLeft, abs (left));
+            peakRight = max (peakRight, abs (right));
+
+            out <- float32<2> (left, right);
+
+            advanceScan();
+
+            if (grainEmitCountdown > 0.0)
+                grainEmitCountdown -= 1.0;
+
+            reportState();
+            advance();
+        }
+    }
+}

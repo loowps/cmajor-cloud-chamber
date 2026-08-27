@@ -67,6 +67,8 @@ footer {
  */
 .brand {
   margin-left: auto;
+  /// A signature is set once and read whole, so it keeps its width as the bar narrows.
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -118,6 +120,7 @@ footer {
   margin-right: calc(-1 * var(--name-tracking));
   margin-bottom: calc(-1 * var(--name-descent));
   text-transform: uppercase;
+  white-space: nowrap;
   user-select: none;
 }
 </style>

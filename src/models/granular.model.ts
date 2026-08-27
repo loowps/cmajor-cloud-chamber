@@ -211,10 +211,11 @@ const headParameterSpecs: HeadParameterSpec[] = [
     label: 'Size',
     group: 'grain',
     min: 1,
-    max: 2000,
+    max: 10000,
     initial: 120,
     unit: 'ms',
     decimals: 0,
+    /// The geometric middle of 1 and 10000, so the track is very nearly a true log sweep.
     centre: 100
   },
   {

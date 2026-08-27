@@ -114,6 +114,7 @@ defineExpose({ open })
   letter-spacing: var(--name-tracking);
   margin-right: calc(-1 * var(--name-tracking));
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .version {

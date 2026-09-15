@@ -16,6 +16,11 @@ source.
 
 ---
 
+## Installing
+
+Download `CloudChamber-<version>.zip` from the [releases], unzip it, and drag
+`CloudChamber.cmajorpatch` into the Cmajor plugin.
+
 ## Building
 
 ```
@@ -44,6 +49,14 @@ cmake -S dist-clap -B dist-clap/build
 cmake --build dist-clap/build --config Release
 ```
 
+## License
+
+Cloud Chamber is licensed under the [GNU General Public License v3.0 or later](LICENSE).
+
+The bundled IBM Plex Sans and Khand fonts are licensed under the SIL Open Font License; their
+licenses ship alongside them in `public/fonts/`.
+
+[releases]: https://github.com/loowps/cmajor-cloud-chamber/releases
 [CLAP]: https://github.com/free-audio/clap
 [cmajor]: https://github.com/cmajor-lang/cmajor
 [vue.js]: https://vuejs.org/

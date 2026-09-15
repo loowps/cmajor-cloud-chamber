@@ -49,8 +49,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          sparse-checkout: |
-            .github/release-notes.md
+          sparse-checkout: LICENSE
           sparse-checkout-cone-mode: false
           path: source
 
@@ -60,14 +59,9 @@ jobs:
           path: CloudChamber
 
       - name: Package
-        run: zip -r "CloudChamber-${VERSION}.zip" CloudChamber
-
-      - name: Write release notes
         run: |
-          if [ "$PRERELEASE" = true ]; then
-            printf '> [!NOTE]\n> This is a pre-release for testing. Expect rough edges.\n\n' > notes.md
-          fi
-          sed "s/{{version}}/${VERSION}/g" source/.github/release-notes.md >> notes.md
+          cp source/LICENSE CloudChamber/LICENSE
+          zip -r "CloudChamber-${VERSION}.zip" CloudChamber
 
       - name: Create GitHub release
         env:
@@ -78,6 +72,6 @@ jobs:
           gh release create "$GITHUB_REF_NAME" "CloudChamber-${VERSION}.zip" \
             --repo "$GITHUB_REPOSITORY" \
             --title "Cloud Chamber ${VERSION}" \
-            --notes-file notes.md \
+            --generate-notes \
             --verify-tag \
             "${flags[@]}"

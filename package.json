@@ -1,12 +1,12 @@
 {
   "name": "cloud-chamber",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "engines": {
     "node": "24.x"
   },
-  "packageManager": "pnpm@12.4.1",
+  "packageManager": "pnpm@12.4.2",
   "scripts": {
     "dev": "vite",
     "build-dev": "run-p type-check-watch \"build-watch {@}\" --",
@@ -26,6 +26,7 @@
     "type-check-watch": "vue-tsc --build --force --watch",
     "lint": "eslint",
     "format": "prettier --write src/ e2e/",
+    "format:check": "prettier --check src/ e2e/",
     "verify": "run-s type-check lint test:ci"
   },
   "dependencies": {
@@ -38,13 +39,13 @@
     "@tsconfig/node24": "^24.0.5",
     "@types/jsdom": "^30.0.0",
     "@types/node": "^26.5.1",
-    "@vitejs/plugin-vue": "^6.0.8",
+    "@vitejs/plugin-vue": "^6.0.9",
     "@vitest/coverage-v8": "^4.1.11",
     "@vue/eslint-config-typescript": "^14.9.0",
     "@vue/test-utils": "^2.5.0",
     "@vue/tsconfig": "^0.9.1",
     "eslint": "^10.10.0",
-    "eslint-plugin-playwright": "^2.11.0",
+    "eslint-plugin-playwright": "^2.12.0",
     "eslint-plugin-vue": "^10.11.0",
     "jsdom": "^30.0.1",
     "npm-run-all2": "^9.0.3",
